@@ -1,0 +1,19 @@
+name: CI for runbooks
+
+on:
+  workflow_dispatch:
+
+  pull_request:
+
+jobs:
+  runbook_CI:
+    runs-on: ubuntu-latest
+    environment: devops
+    steps:
+      - name: dispatch azure repo 
+        run: |
+          curl -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.DEVOPS_AZURE_TOKEN }}" \
+          https://api.github.com/repos/Uniphar/devops-azure/dispatches \
+          -d '{"event_type":"runbook-trigger-ci"}'
