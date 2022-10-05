@@ -1,11 +1,13 @@
-name: CI for runbooks
+name: CD for runbooks
 
 on:
   workflow_dispatch:
-  pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
-  runbook_CI:
+  runbook_CD:
     runs-on: ubuntu-latest
     environment: devops
     steps:
@@ -15,4 +17,4 @@ jobs:
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer ${{ secrets.DEVOPS_AZURE_TOKEN }}" \
           https://api.github.com/repos/Uniphar/devops-azure/dispatches \
-          -d '{"event_type":"runbook-trigger-ci"}'
+          -d '{"event_type":"runbook-trigger-cd"}'
