@@ -41,9 +41,9 @@ Update-UniHubRoutes $ResourceGroupName $VNetGwName $RouteTableName
     $firewallIp = (Get-AzFirewall -ResourceGroupName $ResourceGroupName).IpConfigurations.PrivateIpAddress
 
     foreach ($route in $learnedRoutes) {
-        if ($null -eq (Get-AzRouteConfig -RouteTable $routeTable -Name "EBgp-$($route.Network.Replace('/','-'))_" -ErrorAction SilentlyContinue)) {
+        if ($null -eq (Get-AzRouteConfig -RouteTable $routeTable -Name "EBgp-$($route.Network.Replace('/','-'))" -ErrorAction SilentlyContinue)) {
             Add-AzRouteConfig -RouteTable $routeTable `
-                              -Name "EBgp-$($route.Network.Replace('/','-'))_" `
+                              -Name "EBgp-$($route.Network.Replace('/','-'))" `
                               -AddressPrefix $route.Network `
                               -NextHopType "VirtualAppliance" `
                               -NextHopIpAddress $firewallIp
