@@ -9,7 +9,6 @@ on:
 jobs:
   runbook_CD:
     runs-on: ubuntu-latest
-    environment: devops
     steps:
       - name: dispatch azure repo 
         run: |
