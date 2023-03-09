@@ -5,6 +5,8 @@ param(
 
 Import-Module -Name Az.Resources
 
+Connect-AzAccount -Identity
+
 Get-AzVM -ResourceGroupName $ResourceGroupName | ForEach-Object {
     Restart-AzVM -ResourceGroupName $ResourceGroupName -Name $_.Name -ErrorAction Continue
 }
