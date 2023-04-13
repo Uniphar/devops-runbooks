@@ -10,10 +10,19 @@ jobs:
   runbook_CD:
     runs-on: ubuntu-latest
     steps:
+      - name: gh-app-install token
+        id: gh-app
+        uses: getsentry/action-github-app-token@v2
+        with:
+          app_id: ${{ secrets.ACTIONS_AUTH_APP_ID }}
+          private_key: ${{ secrets.ACTIONS_AUTH_APP_PRIVATE_KEY }}
+
       - name: dispatch azure repo 
         run: |
-          curl -X POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.DEVOPS_AZURE_TOKEN }}" \
-          https://api.github.com/repos/Uniphar/devops-azure/dispatches \
-          -d '{"event_type":"runbook-trigger-cd"}'
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ steps.gh-app.outputs.token }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/Uniphar/devops-azure/dispatches \
+            -d '{"event_type":"runbook-trigger-cd"}'
