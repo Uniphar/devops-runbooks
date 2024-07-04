@@ -28,8 +28,8 @@ Param(
     [Switch]$removeInactiveDevices = $False,
     [Switch]$disableInactiveDevices =$True,
     [Switch]$nonInteractive=$True,
-    [String]$mailFrom ="jzahumesky@uniphar.ie", #this should not be a shared mailbox
-    [String[]]$mailTo ="jzahumesky@uniphar.ie"
+    [String]$mailFrom ="", #this should not be a shared mailbox
+    [String[]]$mailTo =""
 )
 
 [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Web")
