@@ -51,7 +51,16 @@ function Test-Email {
 
 # Check for email validity if mail is supplied
 
-if ($mailFrom -and $mailTo) {
+if ($mailFrom -or $mailTo) {
+
+    if (-not ($mailFrom -and $mailTo)) {
+        if (-not $mailFrom) {
+            Throw "if you supply mailTo, you also need to supply mailFrom"
+        }
+        
+        Throw "if you supply mailFrom, you also need to supply mailTo"
+    }
+
     if (-not (Test-Email -email $mailFrom)) {
         Throw "Invalid email address for mailFrom: $mailFrom"
     }
