@@ -1,245 +1,155 @@
-﻿<#
-    .SYNOPSIS
-    Generates a report of all devices in your tenant, including the last signed in date (if any) based on the last activity.
-    Optionally, it can remove devices if they have been inactive for a given threshold number of days by supplying the removeInactiveDevices switch
-
-    If the nonInteractive switch is supplied, the script will leverage Managed Identity (e.g. when running as an Azure Runbook) to log in to the Graph API. 
-    Assign the Device.Write.All permissions to the managed identity by using: https://gitlab.com/Lieben/assortedFunctions/-/blob/master/add-roleToManagedIdentity.ps1
-
-    If you want the script to send mail reports, also assign a value for the From, To addresses and assign the Mail.Send graph permission to the managed identity as per above instructions.
-
-    If the firstDisableDevices switch is also supplied, devices will not be deleted when the inactiveThresholdInDays is met, but disabled instead. Then after the 
-    disableDurationInDays threshold, they will be deleted, unless the device has already been inactive for longer than inactiveThresholdDays + disableDurationInDays
-
-    .NOTES
-    filename:   get-AzureAdInactiveDevices.ps1
-    author:     Jos Lieben / jos@lieben.nu
-    copyright:  Lieben Consultancy, free to (re)use, keep headers intact
-    disclaimer: https://www.lieben.nu/liebensraum/contact/#disclaimer-and-copyright
-    site:       https://www.lieben.nu
-    Created:    16/12/2021
-    Updated:    See Gitlab
-#>
-#Requires -Modules @{ ModuleName="Az.Accounts"; ModuleVersion="2.7.0" }, @{ ModuleName="Az.Resources"; ModuleVersion="5.1.0" }
-
-Param(
-    [Int]$inactiveDisableThresholdInDays = 90,
-    [Int]$inactiveDeleteThresholdInDays = 180,
-    [Switch]$removeInactiveDevices = $False,
-    [Switch]$disableInactiveDevices = $True,
-    [Switch]$nonInteractive = $True,
-    [String]$mailFrom = "", #this should not be a shared mailbox
-    [String[]]$mailTo = ""
-)
-
-function Test-Email {
-    param(
-        [string]$email
-    )
-
-    try {
-        if ([System.Net.Mail.MailAddress]::new($email)) {
-            return $true
-        }
-    }
-    catch {
-        return $false
-    }
-
-    return $false
-}
-
-# Check for email validity if mail is supplied
-
-if ($mailFrom -or $mailTo) {
-
-    if (-not ($mailFrom -and $mailTo)) {
-        if (-not $mailFrom) {
-            Throw "if you supply mailTo, you also need to supply mailFrom"
-        }
+<#PSScriptInfo
+.SYNOPSIS
+    Script for Entra ID to cleanup stale device objects
+ 
+.DESCRIPTION
+    This script will get the Entra device objects 
+    The script then compare the ApproximateLastSignInDateTime with the cleanup threshold and remove the device if it is older than the threshold 
+    The script uses Ms Graph with MGGraph modules
         
-        Throw "if you supply mailFrom, you also need to supply mailTo"
-    }
+.EXAMPLE
+   .\Entra-Cleanup-StaleDevices.ps1
+    Will cleanup stale devices 
 
-    if (-not (Test-Email -email $mailFrom)) {
-        Throw "Invalid email address for mailFrom: $mailFrom"
-    }
-    foreach ($recipient in $mailTo) {
-        if (-not (Test-Email -email $recipient)) {
-            Throw "Invalid email address for mailTo: $recipient"
+.NOTES
+    Bawsed on script written by Mr-Tbone (Tbone Granheden) Coligo AB
+
+.CHANGELOG
+    1.0. - Initial Version
+#>
+
+#region ---------------------------------------------------[Set script requirements]-----------------------------------------------
+#
+#Requires -Modules Microsoft.Graph.Authentication
+#Requires -Modules Microsoft.Graph.identity.DirectoryManagement
+#
+#endregion
+
+#region ---------------------------------------------------[Script Parameters]-----------------------------------------------
+#endregion
+
+#region ---------------------------------------------------[Modifiable Parameters and defaults]------------------------------------
+# Customizations
+[int]$DeviceDisableThreshold = 90        # Number of inactive days to determine a stale device to disable
+[int]$DeviceDeleteThreshold  = 180        # Number of inactive days to determine a stale device to delete
+[Bool]$TestMode             = $true    # $True = No devices will be deleted, $False = Stale devices will be deleted
+[Bool]$Verboselogging       = $True     # $True = Enable verbose logging for t-shoot. $False = Disable Verbose Logging
+#endregion
+
+#region ---------------------------------------------------[Set global script settings]--------------------------------------------
+Set-StrictMode -Version Latest
+#endregion
+
+#region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
+import-Module Microsoft.Graph.Authentication
+import-Module Microsoft.Graph.identity.DirectoryManagement
+#endregion
+
+#region ---------------------------------------------------[Static Variables]------------------------------------------------------
+[System.Collections.ArrayList]$RequiredScopes   = @("Device.ReadWrite.All")
+[datetime]$scriptStartTime                      = Get-Date
+[string]$disableDate = "$(($scriptStartTime).AddDays(-$DeviceDisableThreshold).ToString("yyyy-MM-dd"))T00:00:00z"
+[string]$deleteDate = "$(($scriptStartTime).AddDays(-$DeviceDeleteThreshold).ToString("yyyy-MM-dd"))T00:00:00z"
+if ($Verboselogging){$VerbosePreference         = "Continue"}
+else{$VerbosePreference                         = "SilentlyContinue"}
+#endregion
+
+#region ---------------------------------------------------[Functions]------------------------------------------------------------
+function ConnectTo-MgGraph {
+    param (
+        [System.Collections.ArrayList]$RequiredScopes
+    )
+    Begin {
+        $ErrorActionPreference = 'stop'
+        [String]$resourceURL = "https://graph.microsoft.com/"
+        $GraphAccessToken = $null
+        if ($env:AUTOMATION_ASSET_ACCOUNTID) {  [Bool]$ManagedIdentity = $true}  # Check if running in Azure Automation
+        else {                                  [Bool]$ManagedIdentity = $false} # Otherwise running in Local PowerShell
         }
-    }
-}
-
-[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Web")
-$res = [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
-try {
-    if ($nonInteractive) {
-        Write-Output "Logging in with MI"
-        $Null = Connect-AzAccount -Identity -ErrorAction Stop
-        Write-Output "Logged in as MI"
-    }
-    else {
-        Login-AzAccount -ErrorAction Stop
-    }
-}
-catch {
-    Throw $_
-}
-
-$context = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile.DefaultContext
-$token = ([Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id.ToString(), $null, [Microsoft.Azure.Commands.Common.Authentication.ShowDialog]::Never, $null, "https://graph.microsoft.com")).AccessToken
-            
-$propertiesSelector = @("id", "accountEnabled", "createdDateTime", "approximateLastSignInDateTime", "deviceId", "displayName", "onPremisesSyncEnabled", "operatingSystem", "profileType", "trustType", "sourceType")
-
-if (!$nonInteractive) {
-    Write-Progress -Activity "Azure AD Device Report" -Status "Grabbing all devices in your AD" -Id 1 -PercentComplete 0
-}
-
-$devices = @()
-$deviceData = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/devices?`$select=*" -Method GET -Headers @{"Authorization" = "Bearer $token" }
-$devices += $deviceData.value
-while ($deviceData.'@odata.nextLink') {
-    if (!$nonInteractive) {
-        Write-Progress -Activity "Azure AD Device Report" -Status "Grabbing all devices in your AD ($($devices.count))" -Id 1 -PercentComplete 0
-    }
-    $deviceData = Invoke-RestMethod -Uri $deviceData.'@odata.nextLink' -Method GET -Headers @{"Authorization" = "Bearer $token" }    
-    $devices += $deviceData.value
-}
-
-$reportData = @()
-for ($i = 0; $i -lt $devices.Count; $i++) {
-    try { $percentComplete = $i / $devices.Count * 100 }catch { $percentComplete = 0 }
-    if (!$nonInteractive) {
-        Write-Progress -Activity "Azure AD Device Report" -Status "Processing $i/$($devices.Count) $($devices[$i].displayName)" -Id 1 -PercentComplete $percentComplete
-    }
-    $obj = [PSCustomObject]@{}
-    foreach ($property in $propertiesSelector) {
-        $obj | Add-Member -MemberType NoteProperty -Name $property -Value $devices[$i].$property
-    }
-
-    $lastSignIn = $Null
-    if ($devices[$i].approximateLastSignInDateTime) {
-        if ($devices[$i].signInActivity.lastSignInDateTime -ne "0001-01-01T00:00:00Z") {
-            $lastSignIn = [DateTime]$devices[$i].approximateLastSignInDateTime
-        }
-    }
-
-    $created = $Null
-    if ($devices[$i].createdDateTime) {
-        $created = $devices[$i].createdDateTime
-    }
-    elseif ($devices[$i].registrationDateTime) {
-        $created = $devices[$i].registrationDateTime
-    }
-    else {
-        $created = $devices[$i].approximateLastSignInDateTime
-    }
-
-    if ($lastSignIn) {
-        Write-Host "$($devices[$i].displayName) detected last signin: $lastSignIn"
-        $obj | Add-Member -MemberType NoteProperty -Name "LastSignIn" -Value $lastSignIn.ToString("yyyy-MM-dd hh:mm:ss")
-        $obj | Add-Member -MemberType NoteProperty -Name "InactiveDays" -Value ([math]::Round((New-TimeSpan -Start ($lastSignIn) -End (Get-Date)).TotalDays))
-    }
-    else {
-        Write-Host "$($devices[$i].displayName) detected last signin: Never"
-        $obj | Add-Member -MemberType NoteProperty -Name "InactiveDays" -Value ([math]::Round((New-TimeSpan -Start ([DateTime]$created) -End (Get-Date)).TotalDays))
-        $obj | Add-Member -MemberType NoteProperty -Name "LastSignIn" -Value "Never"
-    }
-
-    $obj | Add-Member -MemberType NoteProperty -Name "DeviceAgeInDays" -Value ([math]::Round((New-TimeSpan -Start ([DateTime]$created) -End (Get-Date)).TotalDays))
-
-    if ($obj.InactiveDays -gt $inactiveThresholdInDays) {       
-        try {
-            if ($obj.operatingSystem -eq "Unknown") {
-                Throw "it is an autopilot object and has to be deleted or deactivated in AutoPilot"
-            }
-            if ($obj.onPremisesSyncEnabled) {
-                Throw "it is synced from an on premises AD, please delete or deactivate it there"
-            }
-            if ($obj.InactiveDays -gt $inactiveDeleteThresholdInDays) {
-                if ($removeInactiveDevices) {
-                    Write-Host "Will delete $($devices[$i].displayName) because it was inactive for more than $inactiveDeleteThresholdInDays days ($($obj.InactiveDays))"
-                    Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/devices/$($devices[$i].id)" -Method DELETE -Headers @{"Authorization" = "Bearer $token" }
-                    $obj | Add-Member -MemberType NoteProperty -Name "Result" -Value "Removed"
-                    Write-Host "Deleted $($devices[$i].displayName)"            
+    Process {
+        if ($ManagedIdentity){ #Connect to the Microsoft Graph using the ManagedIdentity and get the AccessToken
+            Try{$response = [System.Text.Encoding]::Default.GetString((Invoke-WebRequest -UseBasicParsing -Uri "$($env:IDENTITY_ENDPOINT)?resource=$resourceURL" -Method 'GET' -Headers @{'X-IDENTITY-HEADER' = "$env:IDENTITY_HEADER"; 'Metadata' = 'True'}).RawContentStream.ToArray()) | ConvertFrom-Json 
+                $GraphAccessToken = $response.access_token
+                Write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get an Access Token to Graph for managed identity"
                 }
-                else {
-                    Write-Host "Would delete $($devices[$i].displayName) because it was inactive for more than $inactiveDeleteThresholdInDays days ($($obj.InactiveDays))"
-                    $obj | Add-Member -MemberType NoteProperty -Name "Result" -Value "Would Have Removed"
+            Catch{Write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to get an Access Token to Graph for managed identity, with error: $_"}
+            $GraphVersion = ($GraphVersion = (Get-Module -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue).Version | Sort-Object -Desc | Select-Object -First 1)
+            if ('2.0.0' -le $GraphVersion) {
+                Try{Connect-MgGraph -Identity -Nowelcome
+                    $GraphAccessToken = convertto-securestring($response.access_token) -AsPlainText -Force
+                    Write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to connect to Graph with module 2.x and Managedidentity"}
+                Catch{Write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to connect to Graph with module 2.x and Managedidentity, with error: $_"}
+                }
+            else {#Connect to the Microsoft Graph using the AccessToken
+                Try{Connect-mgGraph -AccessToken $GraphAccessToken -NoWelcome
+	                Write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to connect to Graph with module 1.x and Managedidentity"}
+                Catch{Write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to connect to Graph with module 1.x and Managedidentity, with error: $_"}
                 }
             }
-            elseif ($obj.InactiveDays -gt $inactiveDisableThresholdInDays) {
-                if ($obj.accountEnabled -eq $True) {
-                    #device is active, we need to disable it as inactivity threshold is met
-                    $body = @{
-                        "accountEnabled" = $false
-                    }
-                    if ($disableInactiveDevices) {
-                        Write-Host "Will disable $($devices[$i].displayName) because it was inactive for more than $inactiveDisableThresholdInDays days ($($obj.InactiveDays))"
-                        Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/devices/$($devices[$i].id)" -Body ($body | convertto-json -Depth 5) -Method PATCH -Headers @{"Authorization" = "Bearer $token" } -ContentType "application/json"
-                        $obj | Add-Member -MemberType NoteProperty -Name "Result" -Value "Disabled"
-                        Write-Host "Disabled $($devices[$i].displayName)"
-                    }
-                    else {
-                        Write-Host "Would disable $($devices[$i].displayName) because it was inactive for more than $inactiveDisableThresholdInDays days ($($obj.InactiveDays))"
-                        $obj | Add-Member -MemberType NoteProperty -Name "Result" -Value "Would Have Disabled"
-                    }
-
-                }            
+        else{
+            Try{Connect-MgGraph -Scope $RequiredScopes
+                Write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to connect to Graph manually"}
+            Catch{Write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to connect to Graph manually, with error: $_"}
             }
-            else {
-                $obj | Add-Member -MemberType NoteProperty -Name "Result" -Value "N/A" 
-            }
-        }
-        catch {
-            $obj | Add-Member -MemberType NoteProperty -Name "Result" -Value "Failed"
-            Write-Host "Failed to delete or disable $($devices[$i].displayName) because $_"
-        }
-    }
-    $reportData += $obj
-}
-
-$reportData | Export-CSV -Path "deviceActivityReport.csv" -Encoding UTF8 -NoTypeInformation
-
-if (!$nonInteractive) {
-    .\deviceActivityReport.csv
-}
-
-If ($mailFrom -and $mailTo) {
-    $body = @{
-        "message"         = @{
-            "subject"      = "device activity report"
-            "body"         = @{
-                "contentType" = "HTML"
-                "content"     = [String]"please find attached an automated device activity report"
-            }
-            "toRecipients" = @()
-            "from"         = [PSCustomObject]@{
-                "emailAddress" = [PSCustomObject]@{
-                    "address" = $mailFrom
+        #Checking if all permissions are granted to the script identity in Graph and exit if not
+        [System.Collections.ArrayList]$CurrentPermissions  = (Get-MgContext).Scopes
+        foreach ($RequiredScope in $RequiredScopes) {
+            if (Compare-Object $currentpermissions $RequiredScope -IncludeEqual | Where-Object -FilterScript {$_.SideIndicator -eq '=='}){
+                Write-Verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success, Script identity has a scope permission: $RequiredScope"
                 }
+            else {Write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed, Script identity is missing a scope permission: $RequiredScope"}
             }
-            "attachments"  = @()
-        };
-        "saveToSentItems" = $False
-    }
-
-    foreach ($recipient in $mailTo) {
-        $body.message.toRecipients += [PSCustomObject]@{"emailAddress" = [PSCustomObject]@{"address" = $recipient } } 
-    }
-
-    $attachment = Get-Item "deviceActivityReport.csv"
-
-    $FileName = (Get-Item -Path $attachment).name
-    $base64string = [Convert]::ToBase64String([IO.File]::ReadAllBytes($attachment))
-    $body.message.attachments += [PSCustomObject]@{
-        "@odata.type"  = "#microsoft.graph.fileAttachment"
-        "name"         = "deviceActivityReport.csv"
-        "contentType"  = "text/plain"
-        "contentBytes" = "$base64string"
-    }
-
-    Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/users/$mailFrom/sendMail" -Method POST -Headers @{"Authorization" = "Bearer $token" } -Body ($body | convertto-json -depth 10) -ContentType "application/json"
-
+        #Return the access token if available and cleanup memory after connecting to Graph
+        return $GraphAccessToken
+        }
+    End {$MemoryUsage = [System.GC]::GetTotalMemory($true)
+        Write-Verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to cleanup Memory usage after connect to Graph to: $(($MemoryUsage/1024/1024).ToString('N2')) MB"
+        }   
 }
+#endregion
+
+#region ---------------------------------------------------[[Script Execution]------------------------------------------------------
+$StartTime = Get-Date
+$MgGraphAccessToken = ConnectTo-MgGraph -RequiredScopes $RequiredScopes
+
+#Get Pending Devices to disable
+try{$pendingdevices = Get-MgDevice -All -Filter "ApproximateLastSignInDateTime le $($disableDate) AND ApproximateLastSignInDateTime ge $($deleteDate)"
+    write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get $($pendingdevices.count) Pending Devices to disable"}
+catch{write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to get Pending Devices with error: $_"}
+
+#Get Stale Devices to delete
+try{$staledevices = Get-MgDevice -All -Filter "ApproximateLastSignInDateTime le $($deleteDate)"
+    write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get $($staledevices.count) Stale Devices to delete"}
+catch{write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to get Stale Devices with error: $_"}
+
+# would it be possible to automate sending these two files (or just variables as a table) via email ? 
+# I noticed there is Sendgrid installed in Azure for sending emails from Azure, could you please rewrite the followin two rows to send email ?
+#recipient would be defined ideally as a variable in automated account, for testing use : jzahumensky@uniphar.ie
+
+$staleDevices | Export-Csv -Path c:\temp\deleted-devices.csv -NoTypeInformation
+
+$pendingDevices | Export-Csv -Path c:\temp\disabled-devices.csv -NoTypeInformation
+
+
+
+#Disable Pending Devices
+foreach ($device in $pendingdevices) {
+    Write-Output "Device $($device.DisplayName) is pending to be disabled"
+    if ($TestMode -eq $False) {
+        try{Update-MgDevice -DeviceId $device.Id -AccountEnabled:$False
+            write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to disable Device $($device.DisplayName)"}
+        catch{write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to disable Device $($device.DisplayName) with error: $_"}
+    }
+}
+
+#Delete Stale Devices
+foreach ($device in $staledevices) {
+    Write-Output "Device $($device.DisplayName) is stale and will be removed"
+    if ($TestMode -eq $False) {
+        try{Remove-MgDevice -DeviceId $device.Id
+            write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to remove Device $($device.DisplayName)"}
+        catch{write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to remove Device $($device.DisplayName) with error: $_"}
+    }
+}
+
+$VerbosePreference = "SilentlyContinue"
