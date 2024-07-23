@@ -64,7 +64,7 @@ Import-Module Microsoft.Graph.identity.DirectoryManagement
 Disable-AzContextAutosave -Scope Process
 $context = (Connect-AzAccount -Identity).context
 Set-AzContext -SubscriptionName $context.Subscription -DefaultProfile $context
-Connect-MgGraph -NoWelcome
+Connect-MgGraph -Identity -NoWelcome
 
 $ErrorActionPreference = "Stop"
 $reportDir = "c:\temp"
