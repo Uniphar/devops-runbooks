@@ -1,6 +1,5 @@
-function Remove-UniRoleAssignments {
+function Remove-RoleAssignments {
     <#
-
     .SYNOPSIS
     Periodically ran function that removes unwanted role assignments scoped to the current subscription.
 
@@ -8,7 +7,7 @@ function Remove-UniRoleAssignments {
     Periodically ran function that removes role assignments to objects that are not Service Principals scoped to the current subscription. 
 
     .EXAMPLE
-    Remove-UniRoleAssignments
+    Remove-RoleAssignments
 
     #>
 
@@ -34,5 +33,6 @@ Connect-AzAccount -Identity
 
 (Get-AzSubscription).Id | ForEach-Object {
     Set-AzContext -SubscriptionId $_
-	Remove-UniRoleAssignments -Verbose
+    
+	Remove-RoleAssignments -Verbose
 }

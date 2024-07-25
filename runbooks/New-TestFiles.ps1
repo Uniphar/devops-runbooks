@@ -14,7 +14,7 @@ Param(
 
 Import-Module Az.Storage
 
-function TestFilesGenerator {
+function New-TestFiles {
 <#
 
 .SYNOPSIS
@@ -40,11 +40,11 @@ Fileshare in which the files are to be created.
 
 .EXAMPLE
 In a runbook:
-TestFilesGenerator $FileIds $FileShareName $StorageAccountName $StorageAccountRgName
+New-TestFiles $FileIds $FileShareName $StorageAccountName $StorageAccountRgName
 
 To run locally:
 $fs = Get-AzStorageAccount -Name <storage account name> -ResourceGroupName <RG name> | Get-AzStorageShare -Name <file share name>
-$fs | TestFilesGenerator @('FILE-1', 'FILE-2', 'FOO-1')
+$fs | New-TestFiles @('FILE-1', 'FILE-2', 'FOO-1')
 
 #>
 
@@ -86,4 +86,4 @@ $fs | TestFilesGenerator @('FILE-1', 'FILE-2', 'FOO-1')
     }
 }
 
-TestFilesGenerator $FileIds $FileShareName $StorageAccountName $StorageAccountRgName
+New-TestFiles $FileIds $FileShareName $StorageAccountName $StorageAccountRgName
