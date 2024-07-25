@@ -58,7 +58,7 @@ param (
     [string] $ScriptAction = "ReportOnly"
 )
 
-Connect-MgGraph -NoWelcome
+Connect-MgGraph -Identity -NoWelcome
 
 Disable-AzContextAutosave -Scope Process
 $context = (Connect-AzAccount -Identity).context
