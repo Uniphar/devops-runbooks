@@ -38,8 +38,6 @@ function Disable-M2MaintenanceMode {
     } else {
         Write-Output "Maintenance mode is already disabled"
     }
-
-    
 }
 
 $Environment = Get-AutomationVariable -Name Environment

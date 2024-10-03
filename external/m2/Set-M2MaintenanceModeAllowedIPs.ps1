@@ -22,8 +22,6 @@ function Set-M2MaintenanceModeAllowedIPs {
         [string] $AllowedIPs
     )
 
-    # update 015
-
     $resourceGroupName = "b2b-ec-$Environment"
     $storageAccountName = "unib2becop$Environment"
     $fileShareName = "var"

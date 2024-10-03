@@ -38,7 +38,6 @@ function Enable-M2CronJobs {
     } else {
         Write-Output "Cron jobs are already enabled"
     }
-
 }
 
 $Environment = Get-AutomationVariable -Name Environment

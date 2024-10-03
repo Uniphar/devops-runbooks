@@ -12,8 +12,6 @@ function Disable-M2CronJobs {
         [string] $Environment
     )
 
-    # update 015
-
     $resourceGroupName = "b2b-ec-$Environment"
     $storageAccountName = "unib2becop$Environment"
     $fileShareName = "var"
@@ -41,8 +39,6 @@ function Disable-M2CronJobs {
     } else {
         Write-Output "Cron jobs are already disabled"
     }
-
-    
 }
 
 $Environment = Get-AutomationVariable -Name Environment

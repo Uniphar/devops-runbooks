@@ -55,7 +55,6 @@ function Grant-PIMAccess {
 
 
     Write-Output "Successfully assigned '$RoleDefinitionId' role to group '$UserGroupName' for $DurationInHours hours."
-
 }
 
 
@@ -66,8 +65,6 @@ function Enable-M2MaintenanceMode {
         [ValidateSet('dev', 'test', 'prod')]
         [string] $Environment
     )
-
-    # update 015
 
     $resourceGroupName = "b2b-ec-$Environment"
     $storageAccountName = "unib2becop$Environment"
