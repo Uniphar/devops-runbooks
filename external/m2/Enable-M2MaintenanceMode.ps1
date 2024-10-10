@@ -62,23 +62,27 @@ function Enable-M2MaintenanceMode {
     
     param (
         [parameter(Mandatory = $true, Position = 0)]
-        [ValidateSet('dev', 'test', 'prod')]
-        [string] $Environment
+        [string] $StorageAccountName,
+
+        [parameter(Mandatory = $true, Position = 1)]
+        [string] $ResourceGroupName,
+
+        [parameter(Mandatory = $true, Position = 2)]
+        [string] $UserGroupName
     )
 
-    $resourceGroupName = "b2b-ec-$Environment"
-    $storageAccountName = "unib2becop$Environment"
     $fileShareName = "var"
     $tempDir = $env:TEMP
     $maintenanceFileName = ".maintenance.flag"
     $maintenanceFilePath = Join-Path $tempDir $maintenanceFileName
 
-    Write-Output "resourceGroupName     : '$resourceGroupName'"
-    Write-Output "storageAccountName    : '$storageAccountName'"
+    Write-Output "resourceGroupName     : '$ResourceGroupName'"
+    Write-Output "storageAccountName    : '$StorageAccountName'"
     Write-Output "fileShareName         : '$fileShareName'"
     Write-Output "tempDir               : '$tempDir'"
     Write-Output "maintenanceFileName   : '$maintenanceFileName'"
     Write-Output "maintenanceFilePath   : '$maintenanceFilePath'"
+    Write-Output "userGroupName         : '$UserGroupName'"
     
     Connect-MgGraph -Identity -NoWelcome
     Write-Output "Connected to Microsoft Graph"
@@ -86,7 +90,7 @@ function Enable-M2MaintenanceMode {
     $azureProfile = Connect-AzAccount -Identity
     Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
    
-    $storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName -Verbose
+    $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -Verbose
     Write-Output "storageAccount        : '$($storageAccount.Id)'"
 
     if ($null -eq (Get-AzStorageFile -ShareName $fileShareName -Context $storageAccount.Context -Path $maintenanceFileName -ErrorAction SilentlyContinue)){
@@ -98,14 +102,16 @@ function Enable-M2MaintenanceMode {
     }
 
     # Reader
-    Grant-PIMAccess -UserGroupName "Monsoon Developers" -StorageAccountId $storageAccount.Id -RoleDefinitionId "acdd72a7-3385-48ef-bd42-f606fba81ae7" -DurationInHours 2
+    Grant-PIMAccess -UserGroupName $UserGroupName -StorageAccountId $storageAccount.Id -RoleDefinitionId "acdd72a7-3385-48ef-bd42-f606fba81ae7" -DurationInHours 2
 
     # Storage File Data SMB Share Reader
-    Grant-PIMAccess -UserGroupName "Monsoon Developers" -StorageAccountId $storageAccount.Id -RoleDefinitionId "aba4ae5f-2193-4029-9191-0cb91df5e314" -DurationInHours 2
+    Grant-PIMAccess -UserGroupName $UserGroupName -StorageAccountId $storageAccount.Id -RoleDefinitionId "aba4ae5f-2193-4029-9191-0cb91df5e314" -DurationInHours 2
 
     # Storage File Data Privileged Reader
-    Grant-PIMAccess -UserGroupName "Monsoon Developers" -StorageAccountId $storageAccount.Id -RoleDefinitionId "b8eda974-7b85-4f76-af95-65846b26df6d" -DurationInHours 2
+    Grant-PIMAccess -UserGroupName $UserGroupName -StorageAccountId $storageAccount.Id -RoleDefinitionId "b8eda974-7b85-4f76-af95-65846b26df6d" -DurationInHours 2
 }
 
-$Environment = Get-AutomationVariable -Name Environment
-Enable-M2MaintenanceMode $Environment
+$StorageAccountName = Get-AutomationVariable -Name 'M2_OperationsStorageAccountName'
+$ResourceGroupName = Get-AutomationVariable -Name 'M2_ResourceGroupName'
+$UserGroupName = Get-AutomationVariable -Name 'M2_UserGroupName'
+Enable-M2MaintenanceMode $StorageAccountName $ResourceGroupName $UserGroupName 

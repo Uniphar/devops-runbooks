@@ -15,22 +15,22 @@ function Set-M2MaintenanceModeAllowedIPs {
     
     param (
         [parameter(Mandatory = $true, Position = 0)]
-        [ValidateSet('dev', 'test', 'prod')]
-        [string] $Environment,
+        [string] $StorageAccountName,
 
         [parameter(Mandatory = $true, Position = 1)]
+        [string] $ResourceGroupName,
+
+        [parameter(Mandatory = $true, Position = 2)]
         [string] $AllowedIPs
     )
 
-    $resourceGroupName = "b2b-ec-$Environment"
-    $storageAccountName = "unib2becop$Environment"
     $fileShareName = "var"
     $tempDir = $env:TEMP
     $maintenanceFileName = ".maintenance.ip"
     $maintenanceFilePath = Join-Path $tempDir $maintenanceFileName
 
-    Write-Output "resourceGroupName     : '$resourceGroupName'"
-    Write-Output "storageAccountName    : '$storageAccountName'"
+    Write-Output "resourceGroupName     : '$ResourceGroupName'"
+    Write-Output "storageAccountName    : '$StorageAccountName'"
     Write-Output "fileShareName         : '$fileShareName'"
     Write-Output "tempDir               : '$tempDir'"
     Write-Output "maintenanceFileName   : '$maintenanceFileName'"
@@ -39,7 +39,7 @@ function Set-M2MaintenanceModeAllowedIPs {
     $azureProfile = Connect-AzAccount -Identity
     Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
    
-    $storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName -Verbose
+    $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -Verbose
     Write-Output "storageAccount        : '$($storageAccount.Id)'"
 
     $AllowedIPs > $maintenanceFilePath
@@ -47,5 +47,6 @@ function Set-M2MaintenanceModeAllowedIPs {
     Write-Output "$maintenanceFileName file uploaded"
 }
 
-$Environment = Get-AutomationVariable -Name Environment
-Set-M2MaintenanceModeAllowedIPs $Environment $AllowedIPs
+$StorageAccountName = Get-AutomationVariable -Name 'M2_OperationsStorageAccountName'
+$ResourceGroupName = Get-AutomationVariable -Name 'M2_ResourceGroupName'
+Set-M2MaintenanceModeAllowedIPs $StorageAccountName $ResourceGroupName $AllowedIPs

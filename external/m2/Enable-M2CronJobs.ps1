@@ -8,19 +8,19 @@ function Enable-M2CronJobs {
     
     param (
         [parameter(Mandatory = $true, Position = 0)]
-        [ValidateSet('dev', 'test', 'prod')]
-        [string] $Environment
+        [string] $StorageAccountName,
+
+        [parameter(Mandatory = $true, Position = 1)]
+        [string] $ResourceGroupName
     )
 
-    $resourceGroupName = "b2b-ec-$Environment"
-    $storageAccountName = "unib2becop$Environment"
     $fileShareName = "var"
     $tempDir = $env:TEMP
     $maintenanceFileName = ".cron_disable.flag"
     $maintenanceFilePath = Join-Path $tempDir $maintenanceFileName
 
-    Write-Output "resourceGroupName     : '$resourceGroupName'"
-    Write-Output "storageAccountName    : '$storageAccountName'"
+    Write-Output "resourceGroupName     : '$ResourceGroupName'"
+    Write-Output "storageAccountName    : '$StorageAccountName'"
     Write-Output "fileShareName         : '$fileShareName'"
     Write-Output "tempDir               : '$tempDir'"
     Write-Output "maintenanceFileName   : '$maintenanceFileName'"
@@ -29,7 +29,7 @@ function Enable-M2CronJobs {
     $azureProfile = Connect-AzAccount -Identity
     Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
    
-    $storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName -Verbose
+    $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -Verbose
     Write-Output "storageAccount        : '$($storageAccount.Id)'"
 
     if ($null -ne (Get-AzStorageFile -ShareName $fileShareName -Context $storageAccount.Context -Path $maintenanceFileName -ErrorAction SilentlyContinue)){
@@ -40,5 +40,6 @@ function Enable-M2CronJobs {
     }
 }
 
-$Environment = Get-AutomationVariable -Name Environment
-Enable-M2CronJobs $Environment
+$StorageAccountName = Get-AutomationVariable -Name 'M2_OperationsStorageAccountName'
+$ResourceGroupName = Get-AutomationVariable -Name 'M2_ResourceGroupName'
+Enable-M2CronJobs $StorageAccountName $ResourceGroupName
