@@ -21,7 +21,7 @@ function Grant-PIMAccess {
     )
 
     $subscriptionId = (Get-AzContext).Subscription.SubscriptionId
-    Write-Output "subscriptionId        : '$($mgGroup.Id)'"
+    Write-Output "subscriptionId        : '$subscriptionId'"
 
     $fullRoleDefinitionId = "/subscriptions/$subscriptionId/providers/Microsoft.Authorization/roleDefinitions/$RoleDefinitionId"
     Write-Output "fullRoleDefinitionId  : 'fullRoleDefinitionId'"
