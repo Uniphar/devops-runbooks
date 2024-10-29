@@ -18,7 +18,7 @@ function Get-AzResourceQuotaUsage {
 
     Write-Output "Provider: $Provider"
 
-    $subscriptionId = (Get-AzContext).Subscription.Id
+    $subscriptionId = (Get-AzContext).Subscription.SubscriptionId
     $scope = "/subscriptions/$subscriptionId/providers/$Provider/locations/$Location"
     
     Write-Output "Getting quota limits for scope: $scope"
@@ -46,7 +46,7 @@ function Get-AzResourceQuotaUsage {
     # $usage = $usage | Where-Object { $_.UsageValue -gt 0 }
     $quotaUsage = $usage | ForEach-Object {
         $name = $_.Name
-        $currentUsage = [math]::Max($_.UsageValue,0)
+        $currentUsage = [math]::Max($_.UsageValue, 0)
         $limit = ($limits | Where-Object { $_.name -eq $name } | Measure-Object -Property limit -Maximum | Select-Object -ExpandProperty Maximum) ?? 0              
         return [PSCustomObject]@{
             name         = $name
@@ -54,6 +54,7 @@ function Get-AzResourceQuotaUsage {
             limit        = $limit
             usagePercent = ($limit -eq 0) ? 0 : ($currentUsage * 100 / $limit)
             Type         = $Provider
+            location     = $Location
         }
     }
     
@@ -63,14 +64,16 @@ function Get-AzResourceQuotaUsage {
 
 Disable-AzContextAutosave -Scope Process
 
-if (-not (Get-AzContext)) {
-    $azureProfile = Connect-AzAccount -Identity
-    Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
-}
+$azureProfile = Connect-AzAccount -Identity
+Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
 
-Set-AzContext -SubscriptionId (Get-AzSubscription).Id
-
+Write-Output "A"
+Get-AzResourceProvider
+Write-Output "B"
+Get-AzResourceProvider | Where-Object { $_.RegistrationState -eq "Registered" }
+Write-Output "C"
 $resourceProviders = Get-AzResourceProvider | Where-Object { $_.RegistrationState -eq "Registered" } | Select-Object -ExpandProperty ProviderNamespace
+Write-Output "D"
 
 $quotaUsage = @()
 
@@ -81,14 +84,16 @@ foreach ($provider in $ResourceProviders) {
     }
 }
 
-$filteredResources = $quotaUsage | Where-Object { $_.limit -gt 0 -and  $_.UsagePercent -gt $threshold -and $_.Name.ToLower() -notin $excludeResources }
+$resources = @($quotaUsage | Where-Object { $_.limit -gt 0 -and $_.UsagePercent -gt $threshold -and $_.Name.ToLower() -notin $excludeResources })
 
-if ($filteredResources) {
-    Write-Output "Quota usage threshold exceeded for the following resources:"
-    $filteredResources | ForEach-Object {
-        Write-Error "Quota alert: Resource: $($_.Name), Usage: $($_.currentUsage), Limit: $($_.limit), UsagePercent: $($_.usagePercent)"
-    }
-    
-} else {
+if ($resources) {
+    Write-Output "Resources that exceed the quota usage threshold:"
+    Write-Output ($resources | Format-Table | Out-String)
+    Write-Error ( @{
+        "_source"    = "quota"
+        resources = $resources
+    } | ConvertTo-Json)
+}
+else {
     Write-Output "No resources found that exceed the quota usage threshold"
 }
