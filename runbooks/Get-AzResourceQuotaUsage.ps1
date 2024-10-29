@@ -67,13 +67,7 @@ Disable-AzContextAutosave -Scope Process
 $azureProfile = Connect-AzAccount -Identity
 Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
 
-Write-Output "A"
-Get-AzResourceProvider
-Write-Output "B"
-Get-AzResourceProvider | Where-Object { $_.RegistrationState -eq "Registered" }
-Write-Output "C"
 $resourceProviders = Get-AzResourceProvider | Where-Object { $_.RegistrationState -eq "Registered" } | Select-Object -ExpandProperty ProviderNamespace
-Write-Output "D"
 
 $quotaUsage = @()
 
