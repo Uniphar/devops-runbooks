@@ -1,7 +1,7 @@
 Import-Module Az.Resources
 
 $threshold = 70
-$locations = @("northeurope", "westeurope")
+$locations = @("northeurope", "westeurope", "centralindia")
 $excludeResources = @("networkwatchers")
 
 function Write-Output { param ([string] $Message) $Message }
