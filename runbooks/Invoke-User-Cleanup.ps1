@@ -61,13 +61,12 @@ param (
     [int] $InnactivityTime = 45,
 
     [Parameter(Mandatory = $false)]
-    [int] $UserWarningThreshold = 46,
+    [int] $UserWarningThreshold = 35,
 
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $true)]
     [string] $groupId = "3c65e8b9-258c-4469-b0a4-18ca4c508b45"
 
    )
-
 
   #Get onprem AD domain admin credentials from key vault
     $domainUser = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-user").SecretValue #SecureString
@@ -288,15 +287,15 @@ The content of the email.
 }
 
 # Connect to Azure AD
-Connect-AzureAD
+Connect-AzureAD -identity
 
 # Get all members' UPNs
 $exclusion = Get-GroupMembers -GroupId $groupId | ForEach-Object { $_ }
 
 # Connect to Microsoft Graph
-Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All
-#scope for disabling - needs to be switched for disabling
-#Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All, User.ReadWrite.All
+Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All -identity
+#scope for disabling - needs to be switched for disabling !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All, User.ReadWrite.All -identity
 
 # Gather all users in tenant
     $AllUsers = Get-MgBetaUser -Property signinactivity -all | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" } #| Select-Object -First 500
