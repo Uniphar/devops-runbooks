@@ -106,26 +106,30 @@ function Disable-AzureADUser {
     }
 }
 
-
-# Function to get all members of a exclusion group, including nested groups
 function Get-GroupMembers {
     param (
-        [string]$GroupId
+        [string]$GroupId,
+        [ref]$Exclusion
     )
 
-    # Get direct members of the group
-    $members = Get-AzureADGroupMember  -ObjectId $GroupId -all $true
+    if (-not $GroupId) {
+        Write-Error "GroupId cannot be empty."
+        return
+    }
+
+    $members = Get-MgGroupMember -GroupId $GroupId -all | Select -ExpandProperty AdditionalProperties
 
     foreach ($member in $members) {
-        if ($member.ObjectType -eq "User") {
-            # Output the UPN of the user
-            $member.UserPrincipalName
-        } elseif ($member.ObjectType -eq "Group") {
-            # Recursively get members of the nested group
-            Get-GroupMembers -GroupId $member.ObjectId
+        if ($member.'@odata.type' -eq "#microsoft.graph.user") {
+            $Exclusion.Value += $member.userPrincipalName
+        }
+        elseif ($member.'@odata.type' -eq "#microsoft.graph.group") {
+            $group = Get-MgGroup -Filter "displayName eq '$($member.displayName)'" | Select-Object -First 1
+            Get-GroupMembers -GroupId $group.Id -Exclusion $Exclusion
         }
     }
 }
+
 
 #function to sends an email using SendGrid.
 function Send-EmailReport {
@@ -286,16 +290,14 @@ The content of the email.
     return $response
 }
 
-# Connect to Azure AD
-Connect-AzureAD -identity
-
-# Get all members' UPNs
-$exclusion = Get-GroupMembers -GroupId $groupId | ForEach-Object { $_ }
-
 # Connect to Microsoft Graph
 Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All -identity
 #scope for disabling - needs to be switched for disabling !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 #Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All, User.ReadWrite.All -identity
+# Get all exclusion group members' UPNs
+
+Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
+
 
 # Gather all users in tenant
     $AllUsers = Get-MgBetaUser -Property signinactivity -all | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" } #| Select-Object -First 500
