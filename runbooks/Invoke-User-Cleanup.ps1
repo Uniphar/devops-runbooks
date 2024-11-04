@@ -91,8 +91,8 @@ function Disable-OnPremADUser {
     }
 }
 
-# Function to disable user in Azure AD via MS Graph PowerShell module
-function Disable-AzureADUser {
+# Function to disable user in Azure AD via Microsoft Graph PowerShell module
+function Disable-MgUser {
     param (
         [string]$userId
     )
