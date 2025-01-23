@@ -80,9 +80,9 @@ function Disable-OnPremADUser {
     param (
         [string]$userPrincipalName
     )
-    $user = Get-ADUser -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName }
+    $user = Get-ADUser -server unidc10.uniphar.local -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName }
     if ($user) {
-        Disable-ADAccount -Credential $ADCredentials -Identity $user
+        Disable-ADAccount -server unidc10.uniphar.local -Credential $ADCredentials -Identity $user
         Write-Host "Disabled on-prem AD account for user: $userPrincipalName"
         return "Success"
     } else {
@@ -298,11 +298,10 @@ Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All -identit
 
 Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
 
-
 # Gather all users in tenant
     $AllUsers = Get-MgBetaUser -Property signinactivity -all | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" } #| Select-Object -First 500
 
-# creating list of active users in onprem AD - for two options
+# creating lists of active users in onprem AD - with two dates (report is $cutoffDate + disabling is $cutoffDate2)
     $activeUPNs =$null
     # Calculate the cutoff date
     $cutoffDate = (Get-Date).AddDays(-$innactivitytime)
