@@ -33,20 +33,23 @@ function Invoke-UniFrontDoorCustomDomainRevalidation {
         $customDomain = Get-AzFrontDoorCdnCustomDomain -ResourceGroupName $ResourceGroupName -ProfileName $ProfileName -CustomDomainName $customDomain.Name
 
         Write-Output "Checking if _dnsauth recordset already exists for '$($customDomain.HostName)'"
-        $recordSet = Get-AzDnsRecordSet -ZoneName $customDomainName -ResourceGroupName $dnsZoneResourceGroupName -Name "_dnsauth" -RecordType "TXT" -ErrorAction SilentlyContinue
+        $recordSet = Get-AzDnsRecordSet -ZoneName $($customDomain.HostName) -ResourceGroupName $dnsZoneResourceGroupName -Name "_dnsauth" -RecordType "TXT" -ErrorAction SilentlyContinue
     
         if ($recordSet) {
-            Write-Output "Deleting DNS Record for '_dnsauth.$customDomainName'"
+            Write-Output "Deleting DNS Record for '_dnsauth.$($customDomain.HostName)'"
             Remove-AzDnsRecordSet -RecordSet $recordSet
         }
 
-        Write-Output "Creating DNS Record for '_dnsauth.$customDomainName'"
+        Write-Output "Creating DNS Record for '_dnsauth.$($customDomain.HostName)'"
         $records = @()
         $records += New-AzDnsRecordConfig -Value $customDomain.ValidationPropertyValidationToken
-        New-AzDnsRecordSet -ZoneName $customDomainName -ResourceGroupName $dnsZoneResourceGroupName -Name "_dnsauth" -RecordType "TXT" -Ttl 3600 -DnsRecords $records
+        New-AzDnsRecordSet -ZoneName $($customDomain.HostName) -ResourceGroupName $dnsZoneResourceGroupName -Name "_dnsauth" -RecordType "TXT" -Ttl 3600 -DnsRecords $records
     }
 }
 
+Disable-AzContextAutosave -Scope Process
+$azureProfile = Connect-AzAccount -Identity
+Write-Output "Connected to subscription: '$($azureProfile.Context.Subscription.Name)'"
 
 $environment = Get-AutomationVariable -Name 'Environment'
 
