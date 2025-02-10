@@ -1,4 +1,6 @@
-function Invoke-UniFrontDoorCustomDomainValidation {
+function Write-Output { param ([string] $Message) $Message }
+
+function Invoke-UniFrontDoorCustomDomainRevalidation {
     [CmdletBinding()]
     param (
         [string] $ProfileName,
@@ -7,11 +9,11 @@ function Invoke-UniFrontDoorCustomDomainValidation {
 
     $dnsZoneResourceGroupName = "global-dns"
 
-    Write-Verbose "Getting custom domains for Front Door profile '$ProfileName' in resource group '$ResourceGroupName'"
+    Write-Output "Getting custom domains for Front Door profile '$ProfileName' in resource group '$ResourceGroupName'"
     $customDomains = Get-AzFrontDoorCdnCustomDomain -ResourceGroupName $ResourceGroupName -ProfileName $ProfileName
     
     $customDomains | ForEach-Object {
-        Write-Verbose "Checking custom domain '$($_.HostName)'"
+        Write-Output "Checking custom domain '$($_.HostName)'"
         $dnsZone = Get-AzDnsZone -ResourceGroupName $dnsZoneResourceGroupName -Name $_.HostName -ErrorAction SilentlyContinue
         $isApex = $dnsZone ? $true : $false
         return @{
@@ -24,21 +26,21 @@ function Invoke-UniFrontDoorCustomDomainValidation {
     } | Where-Object { $_.IsApex -and $_.HasManageCertificate -and $_.DomainValidationState -eq "PendingRevalidation" } | ForEach-Object {
         $customDomain = $_
 
-        Write-Verbose "Updating validation token from custom domain '$($customDomain.Name)'"
+        Write-Output "Updating validation token from custom domain '$($customDomain.Name)'"
         Update-AzFrontDoorCdnCustomDomainValidationToken -ResourceGroupName $ResourceGroupName -ProfileName $ProfileName -CustomDomainName $customDomain.Name
 
-        Write-Verbose "Getting updated custom domain '$($customDomain.Name)'"
+        Write-Output "Getting updated custom domain '$($customDomain.Name)'"
         $customDomain = Get-AzFrontDoorCdnCustomDomain -ResourceGroupName $ResourceGroupName -ProfileName $ProfileName -CustomDomainName $customDomain.Name
 
-        Write-Verbose "Checking if _dnsauth recordset already exists for '$($customDomain.HostName)'"
+        Write-Output "Checking if _dnsauth recordset already exists for '$($customDomain.HostName)'"
         $recordSet = Get-AzDnsRecordSet -ZoneName $customDomainName -ResourceGroupName $dnsZoneResourceGroupName -Name "_dnsauth" -RecordType "TXT" -ErrorAction SilentlyContinue
     
         if ($recordSet) {
-            Write-Verbose "Deleting DNS Record for '_dnsauth.$customDomainName'"
+            Write-Output "Deleting DNS Record for '_dnsauth.$customDomainName'"
             Remove-AzDnsRecordSet -RecordSet $recordSet
         }
 
-        Write-Verbose "Creating DNS Record for '_dnsauth.$customDomainName'"
+        Write-Output "Creating DNS Record for '_dnsauth.$customDomainName'"
         $records = @()
         $records += New-AzDnsRecordConfig -Value $customDomain.ValidationPropertyValidationToken
         New-AzDnsRecordSet -ZoneName $customDomainName -ResourceGroupName $dnsZoneResourceGroupName -Name "_dnsauth" -RecordType "TXT" -Ttl 3600 -DnsRecords $records
