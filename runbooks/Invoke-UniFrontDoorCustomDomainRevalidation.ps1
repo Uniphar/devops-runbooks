@@ -50,4 +50,4 @@ function Invoke-UniFrontDoorCustomDomainRevalidation {
 
 $environment = Get-AutomationVariable -Name 'Environment'
 
-Invoke-UniFrontDoorCustomDomainValidation -ResourceGroupName "web-$environment" -ProfileName "web-$environment-afd" -Verbose
+Invoke-UniFrontDoorCustomDomainRevalidation -ResourceGroupName "web-$environment" -ProfileName "web-$environment-afd" -Verbose
