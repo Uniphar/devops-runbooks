@@ -3,9 +3,9 @@
 # Setup send email in the end of the script 
 
 [string]$RunDate = Get-Date -format "dd-MMM-yyyy HH:mm:ss"
-$CSVOutputFile = "\\unistorageprodkrb.file.core.windows.net\files-it\Automations\Licenses\report\Microsoft365LicenseServicePlans.csv"
-$ReportFile = "\\unistorageprodkrb.file.core.windows.net\files-it\Automations\Licenses\report\Microsoft365LicenseServicePlans.html"
-$SkuExceptionsFile = "\\unistorageprodkrb.file.core.windows.net\files-it\Automations\Licenses\config\SkuExceptions.csv"
+$CSVOutputFile = "$StorageAccount\report\Microsoft365LicenseServicePlans.csv"
+$ReportFile = "$StorageAccount\report\Microsoft365LicenseServicePlans.html"
+$SkuExceptionsFile = "$StorageAccount\config\SkuExceptions.csv"
 
 # Connect to the Graph and get information about the subscriptions in the tenant
 Connect-MgGraph -Identity -NoWelcome
@@ -32,7 +32,7 @@ $Skus = $Skus | Where-Object { $SkuExceptions -notcontains $_.SkuId }
 # https://docs.microsoft.com/en-us/azure/active-directory/enterprise-users/licensing-service-plan-reference
 # It's used to resolve SKU and service plan code names to human-friendly values
 Write-Output "Loading product data..."
-$ProductInfoDataFile = "\\unistorageprodkrb.file.core.windows.net\files-it\Automations\Licenses\config\Product names and service plan identifiers for licensing.csv"
+$ProductInfoDataFile = "$StorageAccount\config\Product names and service plan identifiers for licensing.csv"
 If (!(Test-Path -Path $ProductInfoDataFile)) {
     Write-Host "No product information data file available - product and service plan names will not be resolved"
     $ProductData = $false
