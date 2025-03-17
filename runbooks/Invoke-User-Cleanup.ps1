@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Disable member accounts on MS Entra based on inactivity thresholds and sends an email report.
+Disable user accounts on MS Entra and Active Directory based on inactivity thresholds and sends an email report.
 
 .DESCRIPTION
 The script 
@@ -38,6 +38,11 @@ Id of the exclusion group, members will not be evaluated incl. nested members.
 .PARAMETER ADCredentials
 Number of inactive days to determine a user to send warning.
 
+.PARAMETER Testing
+Boolean to indicate if the script is running in testing mode.
+
+.PARAMETER ITSupportTeamEmailAddresses
+An array of IT support team email addresses.
 #>
 
 [CmdletBinding()]
@@ -64,17 +69,26 @@ param (
     [int] $UserWarningThreshold = 35,
 
     [Parameter(Mandatory = $true)]
-    [string] $groupId = "3c65e8b9-258c-4469-b0a4-18ca4c508b45"
+    [string] $groupId = "3c65e8b9-258c-4469-b0a4-18ca4c508b45",
 
-   )
+    [Parameter(Mandatory = $false)]
+    [bool] $Testing = $true,
+
+    [Parameter(Mandatory = $true)]
+    [string[]] $ITSupportTeamEmailAddresses
+)
 
   #Get onprem AD domain admin credentials from key vault
     $domainUser = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-user").SecretValue #SecureString
     $domainUser = [Net.NetworkCredential]::new('', $domainUser).Password # decrypt to string
-    $domainuser = -join("unipharad\", $domainuser); # add domain name to the username
+    $domainUser = -join("unipharad\", $domainUser); # add domain name to the username
     $domainPassword = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-pwd").SecretValue #SecureString
     $ADCredentials = new-object -typename System.Management.Automation.PSCredential -argumentlist $domainuser,$domainPassword #combine credentials
   
+    # Define $reportDir
+    $reportDir = $env:TEMP
+
+
 # Function to disable user in on-premises AD
 function Disable-OnPremADUser {
     param (
@@ -106,7 +120,7 @@ function Disable-MgUser {
     }
 }
 
-function Get-GroupMembers {
+function Get-GroupMembers { #recursive function to get all members of a group
     param (
         [string]$GroupId,
         [ref]$Exclusion
@@ -131,14 +145,14 @@ function Get-GroupMembers {
 }
 
 
-#function to sends an email using SendGrid.
-function Send-EmailReport {
+# Function to send an email using SendGrid, with optional attachments.
+function Send-Email {
 <#
 .SYNOPSIS
-Sends an email report using SendGrid.
+Sends an email using SendGrid, with optional attachments.
 
 .DESCRIPTION
-This function sends an email report with the specified content to the given recipient email addresses using SendGrid's API.
+This function sends an email with the specified content to the given recipient email addresses using SendGrid's API. Attachments are optional.
 
 .PARAMETER SendGridApiKey
 The API key for authenticating with SendGrid.
@@ -159,7 +173,7 @@ The subject of the email.
 The content of the email.
 
 .PARAMETER Attachments
-An array of attachments to include in the email.
+An optional array of attachments to include in the email.
 #>
     Param(
         [Parameter(Mandatory = $true)]
@@ -180,122 +194,61 @@ An array of attachments to include in the email.
         [Parameter(Mandatory = $true)]
         [String] $Content,
 
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [Object[]] $Attachments
     )
 
-    $headers = @{
-        "Authorization" = "Bearer $SendGridApiKey"
-        "Content-Type"  = "application/json"
-    }
-
-    $attachments = $Attachments | ForEach-Object {
-        $contentCsv = Get-Content $_.file -Raw
-
-        @{
-            content     = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($contentCsv))
-            filename    = [System.IO.Path]::GetFileName($_.file)
-            type        = $_.type
-            disposition = "attachment"
+    if ($Testing) {
+        $date = Get-Date -Format "yyyy-MM-dd"
+        $logFile = "$env:TEMP\email_log_$date.txt"
+        $logContent = "To: $($RecipientEmailAddresses -join ', ')" + [Environment]::NewLine +
+                      "Subject: $Subject" + [Environment]::NewLine +
+                      "Content: $Content" + [Environment]::NewLine +
+                      "Attachments: $($Attachments | ForEach-Object { $_.filename } -join ', ')" + [Environment]::NewLine +
+                      "----------------------------------------" + [Environment]::NewLine
+        Add-Content -Path $logFile -Value $logContent
+    } else {
+        $headers = @{
+            "Authorization" = "Bearer $SendGridApiKey"
+            "Content-Type"  = "application/json"
         }
-    }
 
-    $body = @{
-        from             = @{ email = $SenderEmailAddress }
-        personalizations = @(@{ to = @($RecipientEmailAddresses | ForEach-Object { @{ email = $_ } }) })
-        subject          = $Subject
-        content          = @(@{ type = "text/plain"; value = $Content })
-        attachments      = $attachments
-    }
+        $attachments = if ($Attachments) {
+            $Attachments | ForEach-Object {
+                $contentCsv = Get-Content $_.file -Raw
 
-    $bodyJson = $body | ConvertTo-Json -Depth 4
-    Invoke-RestMethod -Uri $SendGridApiEndpoint -Method Post -Headers $headers -Body $bodyJson
-}
-
-# Function to send an email using SendGrid without attachments.
-function Send-EmailNotification {
-<#
-.SYNOPSIS
-Sends an email report using SendGrid.
-
-.DESCRIPTION
-This function sends an email report with the specified content to the given recipient email addresses using SendGrid's API.
-
-.PARAMETER SendGridApiKey
-The API key for authenticating with SendGrid.
-
-.PARAMETER SendGridApiEndpoint
-The endpoint URL for the SendGrid API.
-
-.PARAMETER SenderEmailAddress
-The email address of the sender.
-
-.PARAMETER RecipientEmailAddresses
-An array of recipient email addresses.
-
-.PARAMETER Subject
-The subject of the email.
-
-.PARAMETER Content
-The content of the email.
-#>
-    Param(
-        [Parameter(Mandatory = $true)]
-        [string] $SendGridApiKey,
-
-        [Parameter(Mandatory = $true)]
-        [string] $SendGridApiEndpoint,
-
-        [Parameter(Mandatory = $true)]
-        [string] $SenderEmailAddress,
-
-        [Parameter(Mandatory = $true)]
-        [string[]] $RecipientEmailAddresses,
-
-        [Parameter(Mandatory = $true)]
-        [string] $Subject,
-
-        [Parameter(Mandatory = $true)]
-        [string] $Content
-    )
-
-    # Construct the email payload
-    $emailPayload = @{
-        personalizations = @(
-            @{
-                to = $RecipientEmailAddresses | ForEach-Object { @{ email = $_ } }
-                subject = $Subject
+                @{
+                    content     = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($contentCsv))
+                    filename    = [System.IO.Path]::GetFileName($_.file)
+                    type        = $_.type
+                    disposition = "attachment"
+                }
             }
-        )
-        from = @{
-            email = $SenderEmailAddress
+        } else {
+            @()
         }
-        content = @(
-            @{
-                type = "text/plain"
-                value = $Content
-            }
-        )
+
+        $body = @{
+            from             = @{ email = $SenderEmailAddress }
+            personalizations = @(@{ to = @($RecipientEmailAddresses | ForEach-Object { @{ email = $_ } }) })
+            subject          = $Subject
+            content          = @(@{ type = "text/plain"; value = $Content })
+            attachments      = $attachments
+        }
+
+        $bodyJson = $body | ConvertTo-Json -Depth 4
+        Invoke-RestMethod -Uri $SendGridApiEndpoint -Method Post -Headers $headers -Body $bodyJson
     }
-
-    # Convert the payload to JSON
-    $jsonPayload = $emailPayload | ConvertTo-Json -Depth 10
-
-    # Send the email using SendGrid API
-    $response = Invoke-RestMethod -Method Post -Uri $SendGridApiEndpoint -Headers @{
-        "Authorization" = "Bearer $SendGridApiKey"
-        "Content-Type"  = "application/json"
-    } -Body $jsonPayload
-
-    return $response
 }
 
 # Connect to Microsoft Graph
-Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All -identity
-#scope for disabling - needs to be switched for disabling !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-#Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All, User.ReadWrite.All -identity
-# Get all exclusion group members' UPNs
+if ($Testing) {
+    Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All -identity
+} else {
+    Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All, User.ReadWrite.All -identity
+}
 
+# Get all exclusion group members' UPNs
 Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
 
 # Gather all users in tenant
@@ -332,7 +285,7 @@ Foreach ($user in $AllUsers) {
        Write-host "Gathering sign-in information for $($user.DisplayName)" -ForegroundColor Cyan
 
 
-    # Count the last signing date from all posiible variants
+    # Count the last signing date from all posible variants
            # Retrieve the date values
             $LastInteractiveSignIn = $user.SignInActivity.LastSignInDateTime
             $LastNonInteractiveSignin = $user.SignInActivity.LastNonInteractiveSignInDateTime
@@ -365,7 +318,7 @@ Foreach ($user in $AllUsers) {
         }
     $daysSinceCreation = [math]::Round(((Get-Date) - $accountCreationDate).TotalDays)
 
-if ($daysSinceCreation -gt 21 -and $maxDate -lt (Get-Date).AddDays(-$innactivitytime)) { # if user inactive and the account is not new, then 
+if ($daysSinceCreation -gt 21 -and $maxDate -lt (Get-Date).AddDays(-$InnactivityTime)) { # if user inactive and the account is not new, then 
         # Get current user license information
         $licenses = (Get-MgBetaUserLicenseDetail -UserId $user.id).SkuPartNumber -join ", "
     
@@ -387,7 +340,6 @@ if ($daysSinceCreation -gt 21 -and $maxDate -lt (Get-Date).AddDays(-$innactivity
     
       # Verify if the user is in the $exclusion list, if not, continue
       if ($user.UserPrincipalName -notin $exclusion) {
-    
     
     
         # Create informational object to add to report
@@ -430,7 +382,7 @@ if ($daysInactive -eq $UserWarningThreshold) { # if user inactive then
       if ($user.UserPrincipalName -notin $activeUPNs2) {
     
       # Verify if the user is in the $exclusion list, if not, continue
-      if ($user.UserPrincipalName -notin $exclusion) {
+if ($user.UserPrincipalName -notin $exclusion) {
     
         # Create informational object to add to report
         $obj2 = [pscustomobject][ordered]@{
@@ -452,20 +404,21 @@ if ($daysInactive -eq $UserWarningThreshold) { # if user inactive then
 
 }
 
-
-
-
-$report | Export-CSV -path C:\temp\disabled_users.csv -NoTypeInformation
-$notification | Export-CSV -path C:\temp\notification_list.csv -NoTypeInformation
-
+$report | Export-CSV -path "$reportDir\disabled_users.csv" -NoTypeInformation
+$notification | Export-CSV -path "$reportDir\notification_list.csv" -NoTypeInformation
 
 # Initialize report array
 $disableReport = @()
 
 # Iterate over the report and disable users
 foreach ($user in $report) {
-    $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName
-    $azureResult = Disable-AzureADUser -userId $user.Id
+    if (-not $Testing) {
+        $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName
+        $azureResult = Disable-MgUser -userId $user.UserPrincipalName
+    } else {
+        $onPremResult = "Testing mode - no action taken"
+        $azureResult = "Testing mode - no action taken"
+    }
 
     # Add result to report
     $disableReport += [PSCustomObject]@{
@@ -476,42 +429,39 @@ foreach ($user in $report) {
 }
 
 # Export the report to CSV
-$disableReport | Export-Csv -Path "C:\Temp\DisableReport.csv" -NoTypeInformation
+$disableReport | Export-Csv -Path "$reportDir\DisableReport.csv" -NoTypeInformation
 
+# Send report after disabling to IT support teams
+$attachments = @(
+    @{
+        file = "$reportDir\DisableReport.csv"
+        type = "text/csv"
+    }
+    @{
+        file = "$reportDir\disabled_users.csv"
+        type = "text/csv"
+    }
+    @{
+        file = "$reportDir\notification_list.csv"
+        type = "text/csv"
+    }
+)
 
-#Send report after disabling to IT support teams
+Send-Email -SendGridApiKey $SendGridApiKey `
+           -SendGridApiEndpoint $SendGridApiEndpoint `
+           -SenderEmailAddress $SendGridSenderEmailAddress `
+           -RecipientEmailAddresses $ITSupportTeamEmailAddresses `
+           -Subject "Inactive users report" `
+           -Content "Users disabled: $($report.count), Users notified that account will be disabled: $($notification.count)" `
+           -Attachments $attachments
 
-    $attachments = @(
-        @{
-            file = "$reportDir\DisableReport.csv"
-            type = "text/csv"
-        }
-        @{
-            file = "$reportDir\disabled_users.csv"
-            type = "text/csv"
-        }
-        @{
-            file = "$reportDir\notification_list.csv"
-            type = "text/csv"
-        }
-    )
-
-    Send-EmailReport -SendGridApiKey $sendGridApiKey `
-                     -SendGridApiEndpoint $SendGridApiEndpoint `
-                     -SenderEmailAddress $SendGridSenderEmailAddress `
-                     -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
-                     -Subject "Inactive users report" `
-                     -Content "Users disabled: $($disabled_users.count), Users notified that account will be disabled: $($notification.count)" `
-                     -Attachments $attachments
-
-# Iterate over the report and sendNotification to user and manager 10 days before disabling
-foreach ($user in $report) {
-$SendGridRecipientEmailAddresses = "$userEmail,$userManagerEmail"
-    Send-Emailnotification -SendGridApiKey $sendGridApiKey `
-                             -SendGridApiEndpoint $SendGridApiEndpoint `
-                             -SenderEmailAddress $SendGridSenderEmailAddress `
-                             -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
-                             -Subject "User $user.DisplayName will be disabled" `
-                             -Content "User $user.DisplayName will be disabled in 10 days because of inactivity. User must login to his account to ensure the account stays enabled. In case on any issues please create a support request."
-
+# Iterate over the report and send notification to user and manager 10 days before disabling
+foreach ($user in $notification) {
+    $SendGridRecipientEmailAddresses = @($user.Email, $user.ManagerEmail)
+    Send-Email -SendGridApiKey $SendGridApiKey `
+               -SendGridApiEndpoint $SendGridApiEndpoint `
+               -SenderEmailAddress $SendGridSenderEmailAddress `
+               -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
+               -Subject "User $($user.DisplayName) will be disabled" `
+               -Content "User $($user.DisplayName) will be disabled in 10 days because of inactivity. User must login to his account to ensure the account stays enabled. In case of any issues please create a support request. This is an automated email, please do not answer."
 }
