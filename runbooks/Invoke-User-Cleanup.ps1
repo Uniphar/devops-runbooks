@@ -94,7 +94,7 @@ function Disable-OnPremADUser {
     param (
         [string]$userPrincipalName
     )
-    $user = Get-ADUser -server unidc10.uniphar.local -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName }
+    $user = Get-ADUser -server unidc10.uniphar.local -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName } #it may be better to configure DC name as parameter 
     if ($user) {
         Disable-ADAccount -server unidc10.uniphar.local -Credential $ADCredentials -Identity $user
         Write-Host "Disabled on-prem AD account for user: $userPrincipalName"
