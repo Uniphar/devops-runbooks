@@ -79,12 +79,15 @@ param (
 )
 
   #Get onprem AD domain admin credentials from key vault
-    $domainUser = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-user").SecretValue #SecureString
+    $domainUser = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-user-fullname").SecretValue #SecureString
     $domainUser = [Net.NetworkCredential]::new('', $domainUser).Password # decrypt to string
-    $domainUser = -join("unipharad\", $domainUser); # add domain name to the username
     $domainPassword = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-pwd").SecretValue #SecureString
     $ADCredentials = new-object -typename System.Management.Automation.PSCredential -argumentlist $domainuser,$domainPassword #combine credentials
-  
+
+  #Get onprem SC name from key vault
+    $domaincontroller = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-controller").SecretValue #SecureString
+    $domaincontroller = [Net.NetworkCredential]::new('', $domaincontroller).Password # decrypt to string
+ 
     # Define $reportDir
     $reportDir = $env:TEMP
 
@@ -94,9 +97,9 @@ function Disable-OnPremADUser {
     param (
         [string]$userPrincipalName
     )
-    $user = Get-ADUser -server unidc10.uniphar.local -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName } #it may be better to configure DC name as parameter 
+    $user = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName } #it may be better to configure DC name as parameter 
     if ($user) {
-        Disable-ADAccount -server unidc10.uniphar.local -Credential $ADCredentials -Identity $user
+        Disable-ADAccount -server $domaincontroller -Credential $ADCredentials -Identity $user
         Write-Host "Disabled on-prem AD account for user: $userPrincipalName"
         return "Success"
     } else {
@@ -260,8 +263,8 @@ Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
     $cutoffDate = (Get-Date).AddDays(-$innactivitytime)
     $cutoffDate2 = (Get-Date).AddDays(-$UserWarningThreshold)
     # Get list of all UPNs from on-prem AD that were active within the inactivity time
-    $activeUsers = Get-ADUser -server unidc10.uniphar.local -Credential $ADCredentials -Filter {LastLogonDate -ge $cutoffDate} -Properties UserPrincipalName, LastLogonDate
-    $activeUsers2 = Get-ADUser -server unidc10.uniphar.local -Credential $ADCredentials -Filter {LastLogonDate -ge $cutoffDate2} -Properties UserPrincipalName, LastLogonDate
+    $activeUsers = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter {LastLogonDate -ge $cutoffDate} -Properties UserPrincipalName, LastLogonDate
+    $activeUsers2 = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter {LastLogonDate -ge $cutoffDate2} -Properties UserPrincipalName, LastLogonDate
     # Extract UPNs
     $activeUPNs = $activeUsers | Select-Object -ExpandProperty UserPrincipalName
     $activeUPNs2 = $activeUsers2 | Select-Object -ExpandProperty UserPrincipalName
