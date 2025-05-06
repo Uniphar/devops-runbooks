@@ -164,6 +164,13 @@ try {
 
     # Send Email Report
     $sendGridApiKey = Get-AzKeyVaultSecret -VaultName $SendGridApiKeyKvName -Name $SendGridApiKeyKvSecretName -AsPlainText
+    
+    # Determine the action description based on $ScriptAction
+    $actionDescription = if ($ScriptAction -eq "DisableAndDelete") {
+        "The script is currently running in 'DisableAndDelete' mode and will disable and delete devices."
+    } else {
+        "The script is currently running in 'ReportOnly' mode and will not make any changes to the devices."
+    }
 
     $attachments = @(
         @{
@@ -181,7 +188,7 @@ try {
                      -SenderEmailAddress $SendGridSenderEmailAddress `
                      -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
                      -Subject "Device Cleanup Report" `
-                     -Content "Pending Devices to Disable: $($pendingDevices.count), Stale Devices to Delete: $($staleDevices.count)" `
+                     -Content "Pending Devices to Disable: $($pendingDevices.count), Stale Devices to Delete: $($staleDevices.count). $actionDescription" `
                      -Attachments $attachments
 
     # Clean Up Devices
