@@ -78,18 +78,21 @@ param (
     [string[]] $ITSupportTeamEmailAddresses
 )
 
-  #Get onprem AD domain admin credentials from key vault
-    $domainUser = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-user-fullname").SecretValue #SecureString
-    $domainUser = [Net.NetworkCredential]::new('', $domainUser).Password # decrypt to string
-    $domainPassword = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-admin-pwd").SecretValue #SecureString
-    $ADCredentials = new-object -typename System.Management.Automation.PSCredential -argumentlist $domainuser,$domainPassword #combine credentials
+# Get Key Vault name from Automation Account variable
+$vaultName = Get-AutomationVariable -Name "KeyVaultName"
 
-  #Get onprem SC name from key vault
-    $domaincontroller = (Get-AzKeyVaultSecret -VaultName "uni-core-on-prem-kv" -Name "domain-controller").SecretValue #SecureString
-    $domaincontroller = [Net.NetworkCredential]::new('', $domaincontroller).Password # decrypt to string
+#Get onprem AD domain admin credentials from key vault
+$domainUser = (Get-AzKeyVaultSecret -VaultName $vaultName -Name "domain-admin-user-fullname").SecretValue #SecureString
+$domainUser = [Net.NetworkCredential]::new('', $domainUser).Password # decrypt to string
+$domainPassword = (Get-AzKeyVaultSecret -VaultName $vaultName -Name "domain-admin-pwd").SecretValue #SecureString
+$ADCredentials = new-object -typename System.Management.Automation.PSCredential -argumentlist $domainuser, $domainPassword #combine credentials
+
+#Get onprem SC name from key vault
+$domaincontroller = (Get-AzKeyVaultSecret -VaultName $vaultName -Name "domain-controller").SecretValue #SecureString
+$domaincontroller = [Net.NetworkCredential]::new('', $domaincontroller).Password # decrypt to string
  
-    # Define $reportDir
-    $reportDir = $env:TEMP
+# Define $reportDir
+$reportDir = $env:TEMP
 
 
 # Function to disable user in on-premises AD
@@ -97,12 +100,13 @@ function Disable-OnPremADUser {
     param (
         [string]$userPrincipalName
     )
-    $user = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName } #it may be better to configure DC name as parameter 
+    $user = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter { UserPrincipalName -eq $userPrincipalName } 
     if ($user) {
         Disable-ADAccount -server $domaincontroller -Credential $ADCredentials -Identity $user
         Write-Host "Disabled on-prem AD account for user: $userPrincipalName"
         return "Success"
-    } else {
+    }
+    else {
         Write-Host "User not found in on-prem AD: $userPrincipalName"
         return "User not found"
     }
@@ -117,13 +121,15 @@ function Disable-MgUser {
         Update-MgUser -UserId $userId -AccountEnabled:$false
         Write-Host "Disabled Azure AD account for user: $userId"
         return "Success"
-    } catch {
+    }
+    catch {
         Write-Host "Failed to disable Azure AD account for user: $userId"
         return "Failed"
     }
 }
 
-function Get-GroupMembers { #recursive function to get all members of a group
+function Get-GroupMembers {
+    #recursive function to get all members of a group
     param (
         [string]$GroupId,
         [ref]$Exclusion
@@ -150,7 +156,7 @@ function Get-GroupMembers { #recursive function to get all members of a group
 
 # Function to send an email using SendGrid, with optional attachments.
 function Send-Email {
-<#
+    <#
 .SYNOPSIS
 Sends an email using SendGrid, with optional attachments.
 
@@ -205,12 +211,13 @@ An optional array of attachments to include in the email.
         $date = Get-Date -Format "yyyy-MM-dd"
         $logFile = "$env:TEMP\email_log_$date.txt"
         $logContent = "To: $($RecipientEmailAddresses -join ', ')" + [Environment]::NewLine +
-                      "Subject: $Subject" + [Environment]::NewLine +
-                      "Content: $Content" + [Environment]::NewLine +
-                      "Attachments: $($Attachments | ForEach-Object { $_.filename } -join ', ')" + [Environment]::NewLine +
-                      "----------------------------------------" + [Environment]::NewLine
+        "Subject: $Subject" + [Environment]::NewLine +
+        "Content: $Content" + [Environment]::NewLine +
+        "Attachments: $($Attachments | ForEach-Object { $_.filename } -join ', ')" + [Environment]::NewLine +
+        "----------------------------------------" + [Environment]::NewLine
         Add-Content -Path $logFile -Value $logContent
-    } else {
+    }
+    else {
         $headers = @{
             "Authorization" = "Bearer $SendGridApiKey"
             "Content-Type"  = "application/json"
@@ -227,7 +234,8 @@ An optional array of attachments to include in the email.
                     disposition = "attachment"
                 }
             }
-        } else {
+        }
+        else {
             @()
         }
 
@@ -247,163 +255,172 @@ An optional array of attachments to include in the email.
 # Connect to Microsoft Graph
 if ($Testing) {
     Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All -identity
-} else {
+}
+else {
     Connect-MgGraph -scope User.Read.All, AuditLog.read.All, Group.Read.All, User.ReadWrite.All -identity
 }
 
 # Get all exclusion group members' UPNs
+$exclusion = @()
 Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
 
 # Gather all users in tenant
-    $AllUsers = Get-MgBetaUser -Property signinactivity -all | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" } #| Select-Object -First 500
+$AllUsers = Get-MgBetaUser -Property signinactivity -all | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" } #| Select-Object -First 500
 
 # creating lists of active users in onprem AD - with two dates (report is $cutoffDate + disabling is $cutoffDate2)
-    $activeUPNs =$null
-    # Calculate the cutoff date
-    $cutoffDate = (Get-Date).AddDays(-$innactivitytime)
-    $cutoffDate2 = (Get-Date).AddDays(-$UserWarningThreshold)
-    # Get list of all UPNs from on-prem AD that were active within the inactivity time
-    $activeUsers = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter {LastLogonDate -ge $cutoffDate} -Properties UserPrincipalName, LastLogonDate
-    $activeUsers2 = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter {LastLogonDate -ge $cutoffDate2} -Properties UserPrincipalName, LastLogonDate
-    # Extract UPNs
-    $activeUPNs = $activeUsers | Select-Object -ExpandProperty UserPrincipalName
-    $activeUPNs2 = $activeUsers2 | Select-Object -ExpandProperty UserPrincipalName
+$activeUPNs = $null
+# Calculate the cutoff date
+$cutoffDate = (Get-Date).AddDays(-$innactivitytime)
+$cutoffDate2 = (Get-Date).AddDays(-$UserWarningThreshold)
+# Get list of all UPNs from on-prem AD that were active within the inactivity time
+$activeUsers = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter { LastLogonDate -ge $cutoffDate } -Properties UserPrincipalName, LastLogonDate
+$activeUsers2 = Get-ADUser -server $domaincontroller -Credential $ADCredentials -Filter { LastLogonDate -ge $cutoffDate2 } -Properties UserPrincipalName, LastLogonDate
+# Extract UPNs
+$activeUPNs = $activeUsers | Select-Object -ExpandProperty UserPrincipalName
+$activeUPNs2 = $activeUsers2 | Select-Object -ExpandProperty UserPrincipalName
 
 # Create a new empty array list object for disabling
-        $Report = [System.Collections.Generic.List[Object]]::new()
+$Report = [System.Collections.Generic.List[Object]]::new()
 # Create a new empty array list object for notification
-        $notification = [System.Collections.Generic.List[Object]]::new()
+$notification = [System.Collections.Generic.List[Object]]::new()
    
 Foreach ($user in $AllUsers) {
     # Null variables
-        $SignInActivity = $null
-        $Licenses = $null
-        $Manager = $null
-        $ManagerEmail = $null
-        $maxdate = $null
-        $CreatedDateTime = $null
+    $SignInActivity = $null
+    $Licenses = $null
+    $Manager = $null
+    $ManagerEmail = $null
+    $maxdate = $null
+    $CreatedDateTime = $null
        
     
     # Display progress output 
-       Write-host "Gathering sign-in information for $($user.DisplayName)" -ForegroundColor Cyan
+    Write-host "Gathering sign-in information for $($user.DisplayName)" -ForegroundColor Cyan
 
 
     # Count the last signing date from all posible variants
-           # Retrieve the date values
-            $LastInteractiveSignIn = $user.SignInActivity.LastSignInDateTime
-            $LastNonInteractiveSignin = $user.SignInActivity.LastNonInteractiveSignInDateTime
-            $LastSuccessfullSignInDate = $user.SignInActivity.LastSuccessfulSignInDateTime
+    # Retrieve the date values
+    $LastInteractiveSignIn = $user.SignInActivity.LastSignInDateTime
+    $LastNonInteractiveSignin = $user.SignInActivity.LastNonInteractiveSignInDateTime
+    $LastSuccessfullSignInDate = $user.SignInActivity.LastSuccessfulSignInDateTime
 
-            $maxdate = $null
+    $maxdate = $null
 
-            if ($LastInteractiveSignIn -ne $null) {
-                $maxdate = $LastInteractiveSignIn
-            }
+    if ($LastInteractiveSignIn -ne $null) {
+        $maxdate = $LastInteractiveSignIn
+    }
 
-            if ($LastNonInteractiveSignin -ne $null -and ($maxdate -eq $null -or $LastNonInteractiveSignin -gt $maxdate)) {
-                $maxdate = $LastNonInteractiveSignin
-            }
+    if ($LastNonInteractiveSignin -ne $null -and ($maxdate -eq $null -or $LastNonInteractiveSignin -gt $maxdate)) {
+        $maxdate = $LastNonInteractiveSignin
+    }
 
-            if ($LastSuccessfullSignInDate -ne $null -and ($maxdate -eq $null -or $LastSuccessfullSignInDate -gt $maxdate)) {
-                $maxdate = $LastSuccessfullSignInDate
-            }
+    if ($LastSuccessfullSignInDate -ne $null -and ($maxdate -eq $null -or $LastSuccessfullSignInDate -gt $maxdate)) {
+        $maxdate = $LastSuccessfullSignInDate
+    }
     #reporting on the screen and get $daysInactive for user
     if ($maxdate) {
         $daysInactive = [math]::Round(((Get-Date) - $maxdate).TotalDays)
         Write-Host "Last sign in date is $($maxdate), Days of inactivity: $daysInactive" -ForegroundColor Blue
-    } else {
+    }
+    else {
         Write-Host "Last sign in date is not available" -ForegroundColor Cyan
     }
-     # Retrieve account creation date
+    # Retrieve account creation date
     $accountCreationDate = $user.CreatedDateTime
-        if (-not $accountCreationDate) {
-            $accountCreationDate = [datetime]"1/1/2000" #put some old date if it is empty
-        }
+    if (-not $accountCreationDate) {
+        $accountCreationDate = [datetime]"1/1/2000" #put some old date if it is empty
+    }
     $daysSinceCreation = [math]::Round(((Get-Date) - $accountCreationDate).TotalDays)
 
-if ($daysSinceCreation -gt 21 -and $maxDate -lt (Get-Date).AddDays(-$InnactivityTime)) { # if user inactive and the account is not new, then 
+    if ($daysSinceCreation -gt 21 -and $maxDate -lt (Get-Date).AddDays(-$InnactivityTime)) {
+        # if user inactive and the account is not new, then 
         # Get current user license information
         $licenses = (Get-MgBetaUserLicenseDetail -UserId $user.id).SkuPartNumber -join ", "
     
         # Proceed silently to get manager information
-            try {
-                $managerid = Get-MgUserManager -UserId $user.id -ErrorAction SilentlyContinue
+        try {
+            $managerid = Get-MgUserManager -UserId $user.id -ErrorAction SilentlyContinue
 
-                if ($managerid) {
+            if ($managerid) {
                 $manager = get-mguser -UserId $managerid.Id -ErrorAction SilentlyContinue
                 $managerEmail = $manager.Mail 
-                }
-            } catch {
-                $manager = $null
-                $managerEmail = $null
             }
+        }
+        catch {
+            $manager = $null
+            $managerEmail = $null
+        }
     
-      # Verify if the user is in the $activeUPNs list, if not, continue
-      if ($user.UserPrincipalName -notin $activeUPNs) {
+        # Verify if the user is in the $activeUPNs list, if not, continue
+        if ($user.UserPrincipalName -notin $activeUPNs) {
     
-      # Verify if the user is in the $exclusion list, if not, continue
-      if ($user.UserPrincipalName -notin $exclusion) {
+            # Verify if the user is in the $exclusion list, if not, continue
+            if ($user.UserPrincipalName -notin $exclusion) {
     
     
-        # Create informational object to add to report
-        $obj1 = [pscustomobject][ordered]@{
-            DisplayName                = $user.DisplayName
-            UserPrincipalName          = $user.UserPrincipalName
-            Email                      = $user.Mail
-            Manager                    = $Manager.DisplayName
-            ManagerEmail               = $manager.Mail
-            Licenses                   = $licenses
-            Company                    = $user.CompanyName
-            CreatedDateTime            = $User.CreatedDateTime
-            LastActivityDate           = $maxDate
-          }
-    Write-host "Adding user to disabling list $($user.DisplayName)" -ForegroundColor Red
-    # Add current user info to report
-    $report.Add($obj1)
-    }}
-}
+                # Create informational object to add to report
+                $obj1 = [pscustomobject][ordered]@{
+                    DisplayName       = $user.DisplayName
+                    UserPrincipalName = $user.UserPrincipalName
+                    Email             = $user.Mail
+                    Manager           = $Manager.DisplayName
+                    ManagerEmail      = $manager.Mail
+                    Licenses          = $licenses
+                    Company           = $user.CompanyName
+                    CreatedDateTime   = $User.CreatedDateTime
+                    LastActivityDate  = $maxDate
+                }
+                Write-host "Adding user to disabling list $($user.DisplayName)" -ForegroundColor Red
+                # Add current user info to report
+                $report.Add($obj1)
+            }
+        }
+    }
 
 
 
     #create a report for users to send warning 
-if ($daysInactive -eq $UserWarningThreshold) { # if user inactive then 
+    if ($daysInactive -eq $UserWarningThreshold) {
+        # if user inactive then 
             
-    # Proceed silently to get manager information
-            try {
-                $managerid = Get-MgUserManager -UserId $user.id -ErrorAction SilentlyContinue
+        # Proceed silently to get manager information
+        try {
+            $managerid = Get-MgUserManager -UserId $user.id -ErrorAction SilentlyContinue
 
-                if ($managerid) {
+            if ($managerid) {
                 $manager = get-mguser -UserId $managerid.Id -ErrorAction SilentlyContinue
                 $managerEmail = $manager.Mail 
-                }
-            } catch {
-                $manager = $null
-                $managerEmail = $null
             }
+        }
+        catch {
+            $manager = $null
+            $managerEmail = $null
+        }
     
-      # Verify if the user is in the $activeUPNs list, if not, continue
-      if ($user.UserPrincipalName -notin $activeUPNs2) {
+        # Verify if the user is in the $activeUPNs list, if not, continue
+        if ($user.UserPrincipalName -notin $activeUPNs2) {
     
-      # Verify if the user is in the $exclusion list, if not, continue
-if ($user.UserPrincipalName -notin $exclusion) {
+            # Verify if the user is in the $exclusion list, if not, continue
+            if ($user.UserPrincipalName -notin $exclusion) {
     
-        # Create informational object to add to report
-        $obj2 = [pscustomobject][ordered]@{
-            DisplayName                = $user.DisplayName
-            UserPrincipalName          = $user.UserPrincipalName
-            Email                      = $user.Mail
-            Manager                    = $Manager.DisplayName
-            ManagerEmail               = $manager.Mail
-            Licenses                   = $licenses
-            Company                    = $user.CompanyName
-            CreatedDateTime            = $User.CreatedDateTime
-            LastActivityDate           = $maxDate
-          }
-    Write-host "Adding user to notification list $($user.DisplayName)" -ForegroundColor Yellow
-    # Add current user info to report
-    $notification.Add($obj2)
-    }}
-}
+                # Create informational object to add to report
+                $obj2 = [pscustomobject][ordered]@{
+                    DisplayName       = $user.DisplayName
+                    UserPrincipalName = $user.UserPrincipalName
+                    Email             = $user.Mail
+                    Manager           = $Manager.DisplayName
+                    ManagerEmail      = $manager.Mail
+                    Licenses          = $licenses
+                    Company           = $user.CompanyName
+                    CreatedDateTime   = $User.CreatedDateTime
+                    LastActivityDate  = $maxDate
+                }
+                Write-host "Adding user to notification list $($user.DisplayName)" -ForegroundColor Yellow
+                # Add current user info to report
+                $notification.Add($obj2)
+            }
+        }
+    }
 
 }
 
@@ -418,7 +435,8 @@ foreach ($user in $report) {
     if (-not $Testing) {
         $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName
         $azureResult = Disable-MgUser -userId $user.UserPrincipalName
-    } else {
+    }
+    else {
         $onPremResult = "Testing mode - no action taken"
         $azureResult = "Testing mode - no action taken"
     }
@@ -426,8 +444,8 @@ foreach ($user in $report) {
     # Add result to report
     $disableReport += [PSCustomObject]@{
         UserPrincipalName = $user.UserPrincipalName
-        OnPremResult     = $onPremResult
-        AzureResult      = $azureResult
+        OnPremResult      = $onPremResult
+        AzureResult       = $azureResult
     }
 }
 
@@ -451,20 +469,20 @@ $attachments = @(
 )
 
 Send-Email -SendGridApiKey $SendGridApiKey `
-           -SendGridApiEndpoint $SendGridApiEndpoint `
-           -SenderEmailAddress $SendGridSenderEmailAddress `
-           -RecipientEmailAddresses $ITSupportTeamEmailAddresses `
-           -Subject "Inactive users report" `
-           -Content "Users disabled: $($report.count), Users notified that account will be disabled: $($notification.count)" `
-           -Attachments $attachments
+    -SendGridApiEndpoint $SendGridApiEndpoint `
+    -SenderEmailAddress $SendGridSenderEmailAddress `
+    -RecipientEmailAddresses $ITSupportTeamEmailAddresses `
+    -Subject "Inactive users report" `
+    -Content "Users disabled: $($report.count), Users notified that account will be disabled: $($notification.count)" `
+    -Attachments $attachments
 
 # Iterate over the report and send notification to user and manager 10 days before disabling
 foreach ($user in $notification) {
     $SendGridRecipientEmailAddresses = @($user.Email, $user.ManagerEmail)
     Send-Email -SendGridApiKey $SendGridApiKey `
-               -SendGridApiEndpoint $SendGridApiEndpoint `
-               -SenderEmailAddress $SendGridSenderEmailAddress `
-               -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
-               -Subject "User $($user.DisplayName) will be disabled" `
-               -Content "User $($user.DisplayName) will be disabled in 10 days because of inactivity. User must login to his account to ensure the account stays enabled. In case of any issues please create a support request. This is an automated email, please do not answer."
+        -SendGridApiEndpoint $SendGridApiEndpoint `
+        -SenderEmailAddress $SendGridSenderEmailAddress `
+        -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
+        -Subject "User $($user.DisplayName) will be disabled" `
+        -Content "User $($user.DisplayName) will be disabled in 10 days because of inactivity. User must login to his account to ensure the account stays enabled. In case of any issues please create a support request. This is an automated email, please do not answer."
 }
