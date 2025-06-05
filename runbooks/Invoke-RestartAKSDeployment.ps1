@@ -39,20 +39,20 @@ param (
     [string] $deployName
 )
 
-$azLoginOutput = az login --identity 2>&1
+az login --identity
 if (!$?) 
 {
-    throw "az login failed. Details: $azLoginOutput"
+    throw "az login failed."
 }
 
-$getCredentialsOutput = az aks get-credentials --resource-group $rgName --name $clusterName --subscription $subName 2>&1
+az aks get-credentials --resource-group $rgName --name $clusterName --subscription $subName
 if (!$?)
 {
-    throw "az aks get-credentials failed. Details: $getCredentialsOutput"
+    throw "az aks get-credentials failed."
 }
 
-$invokeCommandOutput = az aks command invoke -n $clusterName -g $rgName -c "kubectl rollout restart deployment/$deployName -n $namespace" 2>&1
+az aks command invoke -n $clusterName -g $rgName -c "kubectl rollout restart deployment/$deployName -n $namespace"
 if (!$?)
 {
-    throw "az aks command invoke failed. Details: $invokeCommandOutput"
+    throw "az aks command invoke failed. Details:"
 }
