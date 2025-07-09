@@ -33,19 +33,19 @@ The action to perform on the devices. Options are "ReportOnly", "DisableAndDelet
 [CmdletBinding()]
 
 param (
-    [Parameter(Mandatory = $true)]
+     [Parameter(Mandatory = $true)]
     [string] $SendGridApiKeyKvName,
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true)]
     [string] $SendGridApiKeyKvSecretName,
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true)]
     [string] $SendGridSenderEmailAddress,
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true)]
     [string] $SendGridRecipientEmailAddresses,  # Comma-separated string
-    [string] $SendGridApiEndpoint = "https://api.sendgrid.com/v3/mail/send",
-    [int] $DeviceDisableThreshold = 90,
-    [int] $DeviceDeleteThreshold = 180,
-    [ValidateSet("ReportOnly", "DisableAndDelete")]
-    [string] $ScriptAction = "ReportOnly"
+    [string] $SendGridApiEndpoint = "https://api.sendgrid.com/v3/mail/send",
+    [int] $DeviceDisableThreshold = 90,
+    [int] $DeviceDeleteThreshold = 180,
+    [ValidateSet("ReportOnly", "DisableAndDelete")]
+    [string] $ScriptAction = "ReportOnly"
 )
 
 Connect-MgGraph -Identity -NoWelcome
@@ -167,12 +167,15 @@ try {
         }
     )
 
+    # Split comma-separated recipient addresses into an array
+    $recipientArray = $SendGridRecipientEmailAddresses -split '\s*,\s*'
+
     Send-EmailReport -SendGridApiKey $sendGridApiKey `
                      -SendGridApiEndpoint $SendGridApiEndpoint `
                      -SenderEmailAddress $SendGridSenderEmailAddress `
-                     -RecipientEmailAddresses $SendGridRecipientEmailAddresses `
+                     -RecipientEmailAddresses $recipientArray `
                      -Subject "Device Cleanup Report" `
-                     -Content "Pending Devices to Disable: $($pendingDevices.count), Stale Devices to Delete: $($staleDevices.count). $actionDescription" `
+                     -Content "This is a report from MS Entra device cleanup. Pending Devices to Disable: $($pendingDevices.count), Stale Devices to Delete: $($staleDevices.count). $actionDescription" `
                      -Attachments $attachments
 
     # Clean Up Devices
