@@ -34,8 +34,8 @@ The endpoint URL for the SendGrid API.
 #>
 
 param(
-    [Parameter(Mandatory=$false)]
-    [string]$GroupName="security group",
+    [Parameter(Mandatory=$true)]
+    [string]$GroupName,
     [Parameter(Mandatory=$false)]
     [string]$StorageAccount="storage account name",
     [Parameter(Mandatory=$false)]
