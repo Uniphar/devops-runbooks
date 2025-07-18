@@ -49,7 +49,7 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$SendGridSenderEmailAddress="sender@yourdomain.com",
     [Parameter(Mandatory=$false)]
-    [string]$SendGridRecipientEmailAddresses="recipient@uniphar.ie",
+    [string]$SendGridRecipientEmailAddresses=$null,
     [Parameter(Mandatory=$false)]
     [string]$SendGridApiEndpoint="https://api.sendgrid.com/v3/mail/send"
 )
