@@ -171,7 +171,7 @@ $recipientArray = $SendGridRecipientEmailAddresses -split '\s*,\s*'
 
 # Prepare email content
 $emailContent = @"
-This is a report from update the security group membership for long term leave users.
+This is a report on the security group membership update for long term leave users.
 
 Group: $GroupName
 
