@@ -101,7 +101,7 @@ foreach ($user in $leaveUsers) {
         }
     }
     catch {
-        # Error is handled below
+        Write-Error "Failed to add user with UPN $upn to group $($group.Id): $($_.Exception.Message)"
     }
     if (-not $added) {
         $unsuccessfulAdds += [PSCustomObject]@{
