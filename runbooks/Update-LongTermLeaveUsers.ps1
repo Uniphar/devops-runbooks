@@ -34,47 +34,43 @@ The endpoint URL for the SendGrid API.
 #>
 
 param(
-    [Parameter(Mandatory = $false)]
-    [string]$GroupName = "uni-sec-inactive_accounts-exclusion-HR",
-    [Parameter(Mandatory = $false)]
-    [string]$StorageAccount = "unipharsftp",
-    [Parameter(Mandatory = $false)]
-    [string]$Container = "kainos2",
-    [Parameter(Mandatory = $false)]
-    [string]$BlobName = "Uniphar Workers On Leave.csv",
-    [Parameter(Mandatory = $false)]
-    [string]$SendGridApiKeyKvName = "YourKeyVaultName",
-    [Parameter(Mandatory = $false)]
-    [string]$SendGridApiKeyKvSecretName = "YourSendGridSecretName",
-    [Parameter(Mandatory = $false)]
-    [string]$SendGridSenderEmailAddress = "sender@yourdomain.com",
-    [Parameter(Mandatory = $false)]
-    [string]$SendGridRecipientEmailAddresses = "jzahumensky@uniphar.ie",
-    [Parameter(Mandatory = $false)]
-    [string]$SendGridApiEndpoint = "https://api.sendgrid.com/v3/mail/send"
+    [Parameter(Mandatory=$false)]
+    [string]$GroupName="security group",
+    [Parameter(Mandatory=$false)]
+    [string]$StorageAccount="storage account name",
+    [Parameter(Mandatory=$false)]
+    [string]$Container="container name",
+    [Parameter(Mandatory=$false)]
+    [string]$BlobName="file name.csv",
+    [Parameter(Mandatory=$false)]
+    [string]$SendGridApiKeyKvName="YourKeyVaultName",
+    [Parameter(Mandatory=$false)]
+    [string]$SendGridApiKeyKvSecretName="YourSendGridSecretName",
+    [Parameter(Mandatory=$false)]
+    [string]$SendGridSenderEmailAddress="sender@yourdomain.com",
+    [Parameter(Mandatory=$false)]
+    [string]$SendGridRecipientEmailAddresses="recipient@uniphar.ie",
+    [Parameter(Mandatory=$false)]
+    [string]$SendGridApiEndpoint="https://api.sendgrid.com/v3/mail/send"
 )
 
-connect-azaccount -Subscription "uniphar-prod"
-Connect-MgGraph -Scopes "Group.ReadWrite.All", "User.Read.All"
+# Automation Account authentication
+Connect-AzAccount -Identity
+Connect-MgGraph -Identity
 
-
-# Get blob content
-$context = New-AzStorageContext -StorageAccountName $storageAccount -UseConnectedAccount
-$blobContent = Get-AzStorageBlobContent -Container $container -Blob $blobName -Context $context -Destination (Join-Path $env:TEMP $blobName) -Force
-$csvPath = Join-Path $env:TEMP $blobName
-
+# Get blob content using managed identity
+$context = New-AzStorageContext -StorageAccountName $StorageAccount -UseManagedIdentity
+$csvPath = Join-Path $env:TEMP $BlobName
+Get-AzStorageBlobContent -Container $Container -Blob $BlobName -Context $context -Destination $csvPath -Force
 
 # Read and parse CSV
 $csvContent = Get-Content $csvPath
 $leaveUsers = $csvContent | ConvertFrom-Csv -Delimiter ","
 
-Write-Output "CSV Headers: $($csvContent[0])"
-$leaveUsers | Select-Object -First 5 | Format-List
-
 # Get group object
-$group = Get-MgGroup -Filter "displayName eq '$groupName'"
+$group = Get-MgGroup -Filter "displayName eq '$GroupName'"
 if (-not $group) {
-    throw "Group $groupName not found."
+    throw "Group $GroupName not found."
 }
 
 # Remove all members from the group
@@ -84,25 +80,28 @@ foreach ($member in $members) {
 }
 
 # Add members from CSV by UPN
+$addedUsers = @()
 $unsuccessfulAdds = @()
 foreach ($user in $leaveUsers) {
     $upn = ($user.Work_Email).Trim()
     $employeeId = ($user.Employee_ID).Trim()
     $added = $false
     if ([string]::IsNullOrWhiteSpace($upn)) {
-        Write-Output "Skipped empty UPN for EmployeeID $employeeId."
         continue
     }
     try {
         $mgUser = Get-MgUser -UserId $upn
         if ($mgUser) {
             New-MgGroupMember -GroupId $group.Id -DirectoryObjectId $mgUser.Id
-            Write-Output "Added $upn to $groupName"
             $added = $true
+            $addedUsers += [PSCustomObject]@{
+                Employee_ID = $employeeId
+                Work_Email  = $upn
+            }
         }
     }
     catch {
-        #    Write-Output "Error adding $upn: $_"
+        # Error is handled below
     }
     if (-not $added) {
         $unsuccessfulAdds += [PSCustomObject]@{
@@ -112,14 +111,11 @@ foreach ($user in $leaveUsers) {
     }
 }
 
-# Output unsuccessful adds
-if ($unsuccessfulAdds.Count -gt 0) {
-    Write-Output "`nUnsuccessful group member additions:"
-    $unsuccessfulAdds | Format-Table
-}
-else {
-    Write-Output "`nAll users were added successfully."
-}
+# Prepare report files
+$addedReportPath = "$env:TEMP\added-users.csv"
+$failedReportPath = "$env:TEMP\failed-users.csv"
+$addedUsers | Export-Csv -Path $addedReportPath -NoTypeInformation
+$unsuccessfulAdds | Export-Csv -Path $failedReportPath -NoTypeInformation
 
 function Send-EmailReport {
     Param(
@@ -167,55 +163,8 @@ function Send-EmailReport {
     Invoke-RestMethod -Uri $SendGridApiEndpoint -Method Post -Headers $headers -Body $bodyJson
 }
 
-# After processing group additions
-$addedUsers = @()
-$unsuccessfulAdds = @()
-foreach ($user in $leaveUsers) {
-    $upn = ($user.Work_Email).Trim()
-    $employeeId = ($user.Employee_ID).Trim()
-    $added = $false
-    if ([string]::IsNullOrWhiteSpace($upn)) {
-        Write-Output "Skipped empty UPN for EmployeeID $employeeId."
-        continue
-    }
-    try {
-        $mgUser = Get-MgUser -UserId $upn
-        if ($mgUser) {
-            New-MgGroupMember -GroupId $group.Id -DirectoryObjectId $mgUser.Id
-            Write-Output "Added $upn to $groupName"
-            $added = $true
-            $addedUsers += [PSCustomObject]@{
-                Employee_ID = $employeeId
-                Work_Email  = $upn
-            }
-        }
-    }
-    catch {
-        #       Write-Output "Error adding $upn: $_"
-    }
-    if (-not $added) {
-        $unsuccessfulAdds += [PSCustomObject]@{
-            Employee_ID = $employeeId
-            Work_Email  = $upn
-        }
-    }
-}
-
-# Prepare report files
-$addedReportPath = "$env:TEMP\added-users.csv"
-$failedReportPath = "$env:TEMP\failed-users.csv"
-$addedUsers | Export-Csv -Path $addedReportPath -NoTypeInformation
-$unsuccessfulAdds | Export-Csv -Path $failedReportPath -NoTypeInformation
-
-# SendGrid details (replace with your Key Vault and secret names)
-$SendGridApiKeyKvName = $SendGridApiKeyKvName
-$SendGridApiKeyKvSecretName = $SendGridApiKeyKvSecretName
-$SendGridSenderEmailAddress = $SendGridSenderEmailAddress
-$SendGridRecipientEmailAddresses = $SendGridRecipientEmailAddresses
-$SendGridApiEndpoint = $SendGridApiEndpoint
-
-# Get SendGrid API key from Key Vault
-$sendGridApiKey = Get-AzKeyVaultSecret -VaultName $SendGridApiKeyKvName -Name $SendGridApiKeyKvSecretName -AsPlainText
+# Get SendGrid API key from Key Vault using managed identity
+$sendGridApiKey = (Get-AzKeyVaultSecret -VaultName $SendGridApiKeyKvName -Name $SendGridApiKeyKvSecretName).SecretValueText
 
 # Split comma-separated recipient addresses into an array
 $recipientArray = $SendGridRecipientEmailAddresses -split '\s*,\s*'
@@ -224,7 +173,7 @@ $recipientArray = $SendGridRecipientEmailAddresses -split '\s*,\s*'
 $emailContent = @"
 This is a report from update the security group membership for long term leave users.
 
-Group: $groupName
+Group: $GroupName
 
 Added users: $($addedUsers.Count)
 Failed to add: $($unsuccessfulAdds.Count)
@@ -241,7 +190,7 @@ Send-EmailReport -SendGridApiKey $sendGridApiKey `
     -SendGridApiEndpoint $SendGridApiEndpoint `
     -SenderEmailAddress $SendGridSenderEmailAddress `
     -RecipientEmailAddresses $recipientArray `
-    -Subject "Group Membership Update Report: $groupName" `
+    -Subject "Group Membership Update Report: $GroupName" `
     -Content $emailContent `
     -Attachments $attachments
 
