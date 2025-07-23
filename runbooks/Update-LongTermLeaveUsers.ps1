@@ -34,23 +34,23 @@ The endpoint URL for the SendGrid API.
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$true, HelpMessage = "Enter the name of the security group to update membership")]
     [string]$GroupName,
-    [Parameter(Mandatory=$false)]
-    [string]$StorageAccount="storage account name",
-    [Parameter(Mandatory=$false)]
-    [string]$Container="container name",
-    [Parameter(Mandatory=$false)]
-    [string]$BlobName="file name.csv",
-    [Parameter(Mandatory=$false)]
-    [string]$SendGridApiKeyKvName="YourKeyVaultName",
-    [Parameter(Mandatory=$false)]
-    [string]$SendGridApiKeyKvSecretName="YourSendGridSecretName",
-    [Parameter(Mandatory=$false)]
-    [string]$SendGridSenderEmailAddress="sender@yourdomain.com",
-    [Parameter(Mandatory=$false)]
-    [string]$SendGridRecipientEmailAddresses=$null,
-    [Parameter(Mandatory=$false)]
+    Parameter(Mandatory = $true, HelpMessage = "Enter the name of the Azure Storage Account, e.g., 'mystorageaccount'")]
+    [string]$StorageAccount,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the name of the container, e.g., 'user-data'")]
+    [string]$Container,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the blob file name, e.g., 'leavers.csv'")]
+    [string]$BlobName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the name of the Key Vault storing the SendGrid API key, e.g., 'MyKeyVault'")]
+    [string]$SendGridApiKeyVaultName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the name of the secret in Key Vault for the SendGrid API key, e.g., 'SendGridApiKey'")]
+    [string]$SendGridApiKeySecretName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the sender's email address, e.g., 'noreply@yourdomain.com'")]
+    [string]$SendGridSenderEmailAddress,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter one or more recipient email addresses as an array, e.g., 'user1@domain.com','user2@domain.com'")]
+    [string[]]$SendGridRecipientEmailAddresses
+    [Parameter(Mandatory=$true), HelpMessage = "Enter SendGridApiEndpoint")]
     [string]$SendGridApiEndpoint="https://api.sendgrid.com/v3/mail/send"
 )
 
