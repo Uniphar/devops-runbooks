@@ -187,10 +187,10 @@ $attachments = @(
 )
 
 Send-EmailReport -SendGridApiKey $sendGridApiKey `
-    -SendGridApiEndpoint $SendGridApiEndpoint `
-    -SenderEmailAddress $SendGridSenderEmailAddress `
-    -RecipientEmailAddresses $recipientArray `
-    -Subject "Group Membership Update Report: $GroupName" `
-    -Content $emailContent `
-    -Attachments $attachments
+                 -SendGridApiEndpoint $SendGridApiEndpoint `
+                 -SenderEmailAddress $SendGridSenderEmailAddress `
+                 -RecipientEmailAddresses $recipientArray `
+                 -Subject "Group Membership Update Report: $GroupName" `
+                 -Content $emailContent `
+                 -Attachments $attachments
 
