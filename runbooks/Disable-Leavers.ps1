@@ -320,10 +320,7 @@ if ($DisableAccounts) {
                 $adUserParams = @{ Identity = $upnToDisable; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
                 if ($global:AdCredential) { $adUserParams['Credential'] = $global:AdCredential }
                 $adUser = $null
-                try { $adUser = Get-ADUser @adUserParams } catch {
-                    # Catch specific auth errors if needed, but primary auth is now strict
-                    throw
-                }
+                $adUser = Get-ADUser @adUserParams
                 if ($adUser.Enabled) {
                     $disParams = @{ Identity = $adUser.DistinguishedName; Server = $OnPremDomainController; ErrorAction = 'Stop' }
                     if ($global:AdCredential) { $disParams['Credential'] = $global:AdCredential }
