@@ -94,8 +94,9 @@ $LocalTempDir = [System.IO.Path]::GetTempPath()
 if (-not (Test-Path $LocalTempDir)) { New-Item -ItemType Directory -Path $LocalTempDir -Force | Out-Null }
 
 # Timestamp once per run so CSVs are unique and not overwritten
+$ReportFilenamePattern = "Leavers_Report_-_Active_Directory_-_IT_withUPN"
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$OutputPath = Join-Path $LocalTempDir "Leavers_Report_-_Active_Directory_-_IT_withUPN_$timestamp.csv"
+$OutputPath = Join-Path $LocalTempDir "${ReportFilenamePattern}_${timestamp}.csv"
 
 function Initialize-AzureContext {
     try {
