@@ -98,44 +98,6 @@ $ReportFilenamePattern = "Leavers_Report_-_Active_Directory_-_IT_withUPN"
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $OutputPath = Join-Path $LocalTempDir "${ReportFilenamePattern}_${timestamp}.csv"
 
-function Initialize-AzureContext {
-    try {
-        Import-Module Az.Accounts -ErrorAction Stop
-        Import-Module Az.Storage -ErrorAction Stop
-        Import-Module Az.KeyVault -ErrorAction Stop
-    }
-    catch {
-        throw 'Required modules Az.Accounts and Az.Storage are not installed in this environment.'
-    }
-    $ctx = $null
-    try { $ctx = Get-AzContext -ErrorAction Stop } catch { $ctx = $null }
-    if (-not $ctx) {
-        try {
-            # Prefer Managed Identity (Azure Automation / managed hosts)
-            Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
-        }
-        catch {
-            # Fallback to interactive (useful for local runs)
-            Connect-AzAccount -ErrorAction Stop | Out-Null
-        }
-    }
-}
-
-function Initialize-GraphContext {
-    try {
-        Import-Module Microsoft.Graph.Users -ErrorAction Stop
-    }
-    catch {
-        throw 'Required module Microsoft.Graph.Users is not installed in this environment.'
-    }
-    try {
-        Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop | Out-Null
-    }
-    catch {
-        throw "Failed to connect to Microsoft Graph with Managed Identity. Ensure the RunAs account has required permissions (User.ReadWrite.All) and is enabled. Error: $($_.Exception.Message)"
-    }
-}
-
 # Initialize Azure and Graph contexts (Managed Identity when available)
 Initialize-AzureContext
 Initialize-GraphContext
@@ -235,52 +197,6 @@ foreach ($row in $rows) {
 # After matching loop, disable matched enabled accounts if DisableAccounts switch is enabled
 $rows | Add-Member -NotePropertyName DisabledActionResult -NotePropertyValue $null -Force
 
-# Centralized AD initialization
-function Initialize-OnPremAD {
-    param(
-        [string]$Server
-    )
-    if (-not $Server) { $Server = $OnPremDomainController }
-    if ($script:OnPremADReady) { return $true }
-    try {
-        if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
-        if ($PSVersionTable.PSEdition -eq 'Core') {
-            # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
-            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
-        }
-        else {
-            Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
-        }
-        # Retrieve credentials from Key Vault
-        if (-not $global:AdCredential) {
-            try {
-                # Use the specified AD Key Vault directly
-                $adUser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
-                $adPassPlain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
-                if ([string]::IsNullOrWhiteSpace($adUser) -or [string]::IsNullOrWhiteSpace($adPassPlain)) { throw 'Empty AD username or password from Key Vault' }
-                $adPass = ConvertTo-SecureString $adPassPlain -AsPlainText -Force
-                $global:AdCredential = New-Object System.Management.Automation.PSCredential ($adUser, $adPass)
-            }
-            catch {
-                throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message). On-prem actions cannot proceed."
-            }
-        }
-        # Try simple query to validate connection and credentials
-        $dcParams = @{ Server = $Server; ErrorAction = 'Stop' }
-        if ($global:AdCredential) { $dcParams['Credential'] = $global:AdCredential }
-        Get-ADDomainController @dcParams | Out-Null
-
-        $script:OnPremADReady = $true
-        Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Warning "On-prem AD not available: $($_.Exception.Message)"
-        $script:OnPremADReady = $false
-        return $false
-    }
-}
-
 if ($DisableAccounts) {
     Write-Host "Disabling matched enabled cloud accounts..." -ForegroundColor Yellow
     $matchedEnabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
@@ -342,7 +258,6 @@ else {
     Write-Host "DisableAccounts is false - no accounts will be disabled" -ForegroundColor Yellow
 }
 
-
 # Reporting setup (reuse same $timestamp as output file)
 $LogPath = (Join-Path $LocalTempDir "Disable-Leavers_Report_$timestamp.log")
 # Ensure output and log directories exist
@@ -358,6 +273,57 @@ $rows | Export-Csv -Path $OutputPath -NoTypeInformation
 
 # Build list of files to send (kept in temp directory)
 $filesToSend = @($InputPath, $OutputPath, $LogPath) | Where-Object { $_ -and (Test-Path $_) }
+
+# Build report summary
+$matched = $rows | Where-Object { $_.MatchSource }
+$matchedCount = $matched.Count
+$unknownCount = $rows.Count - $matchedCount
+$bySource = $matched | Group-Object MatchSource | Select-Object Name, Count
+$disabledSuccess = @($rows | Where-Object { $_.DisabledActionResult -eq 'Disabled' })
+$disabledErrors = @($rows | Where-Object { $_.DisabledActionResult -like 'Error:*' })
+$onPremDisabled = @($rows | Where-Object { $_.OnPremDisabledActionResult -eq 'Disabled' })
+$onPremDisableErr = @($rows | Where-Object { $_.OnPremDisabledActionResult -like 'Error:*' })
+$disabledCount = $disabledSuccess.Count
+$disableErrorCount = $disabledErrors.Count
+
+"" | Out-File -FilePath $LogPath -Append
+"Summary:" | Out-File -FilePath $LogPath -Append
+"Total rows:        $($rows.Count)" | Out-File -FilePath $LogPath -Append
+"Matched rows:      $matchedCount" | Out-File -FilePath $LogPath -Append
+foreach ($g in $bySource) { "  Matched by $($g.Name): $($g.Count)" | Out-File -FilePath $LogPath -Append }
+"Unknown rows:      $unknownCount" | Out-File -FilePath $LogPath -Append
+if ($DisableAccounts) {
+    "Accounts disabled: $disabledCount" | Out-File -FilePath $LogPath -Append
+    "On-prem accounts disabled: $($onPremDisabled.Count)" | Out-File -FilePath $LogPath -Append
+    if ($disableErrorCount -gt 0) { "Disable errors:   $disableErrorCount" | Out-File -FilePath $LogPath -Append }
+    if ($onPremDisableErr.Count -gt 0) { "On-prem disable errors: $($onPremDisableErr.Count)" | Out-File -FilePath $LogPath -Append }
+}
+else {
+    "DisableAccounts is false - no accounts were disabled" | Out-File -FilePath $LogPath -Append
+}
+
+if ($DisableAccounts -and $disableErrorCount -gt 0) {
+    "" | Out-File -FilePath $LogPath -Append
+    "Disable error details:" | Out-File -FilePath $LogPath -Append
+    foreach ($e in $disabledErrors) {
+        $u = $e.UPN; if (-not $u) { $u = $e.'UPN-mail' }; if (-not $u) { $u = $e.DisplayName_UPN }
+        "  Cloud: $u => $($e.DisabledActionResult)" | Out-File -FilePath $LogPath -Append
+    }
+}
+if ($DisableAccounts -and $onPremDisableErr.Count -gt 0) {
+    "" | Out-File -FilePath $LogPath -Append
+    "On-prem disable error details:" | Out-File -FilePath $LogPath -Append
+    foreach ($e in $onPremDisableErr) {
+        $u = $e.UPN; if (-not $u) { $u = $e.'UPN-mail' }; if (-not $u) { $u = $e.DisplayName_UPN }
+        "  OnPrem: $u => $($e.OnPremDisabledActionResult)" | Out-File -FilePath $LogPath -Append
+    }
+}
+
+"Run completed: $(Get-Date)" | Out-File -FilePath $LogPath -Append
+Write-Host "Report log written: $LogPath" -ForegroundColor Green
+
+
+#all the functions:
 
 # Fetch SendGrid API key from Key Vault and send email with attachments
 function Get-SecretFromKeyVault {
@@ -430,50 +396,85 @@ catch {
     Write-Warning $_
 }
 
-# Build report summary
-$matched = $rows | Where-Object { $_.MatchSource }
-$matchedCount = $matched.Count
-$unknownCount = $rows.Count - $matchedCount
-$bySource = $matched | Group-Object MatchSource | Select-Object Name, Count
-$disabledSuccess = @($rows | Where-Object { $_.DisabledActionResult -eq 'Disabled' })
-$disabledErrors = @($rows | Where-Object { $_.DisabledActionResult -like 'Error:*' })
-$onPremDisabled = @($rows | Where-Object { $_.OnPremDisabledActionResult -eq 'Disabled' })
-$onPremDisableErr = @($rows | Where-Object { $_.OnPremDisabledActionResult -like 'Error:*' })
-$disabledCount = $disabledSuccess.Count
-$disableErrorCount = $disabledErrors.Count
-
-"" | Out-File -FilePath $LogPath -Append
-"Summary:" | Out-File -FilePath $LogPath -Append
-"Total rows:        $($rows.Count)" | Out-File -FilePath $LogPath -Append
-"Matched rows:      $matchedCount" | Out-File -FilePath $LogPath -Append
-foreach ($g in $bySource) { "  Matched by $($g.Name): $($g.Count)" | Out-File -FilePath $LogPath -Append }
-"Unknown rows:      $unknownCount" | Out-File -FilePath $LogPath -Append
-if ($DisableAccounts) {
-    "Accounts disabled: $disabledCount" | Out-File -FilePath $LogPath -Append
-    "On-prem accounts disabled: $($onPremDisabled.Count)" | Out-File -FilePath $LogPath -Append
-    if ($disableErrorCount -gt 0) { "Disable errors:   $disableErrorCount" | Out-File -FilePath $LogPath -Append }
-    if ($onPremDisableErr.Count -gt 0) { "On-prem disable errors: $($onPremDisableErr.Count)" | Out-File -FilePath $LogPath -Append }
-}
-else {
-    "DisableAccounts is false - no accounts were disabled" | Out-File -FilePath $LogPath -Append
-}
-
-if ($DisableAccounts -and $disableErrorCount -gt 0) {
-    "" | Out-File -FilePath $LogPath -Append
-    "Disable error details:" | Out-File -FilePath $LogPath -Append
-    foreach ($e in $disabledErrors) {
-        $u = $e.UPN; if (-not $u) { $u = $e.'UPN-mail' }; if (-not $u) { $u = $e.DisplayName_UPN }
-        "  Cloud: $u => $($e.DisabledActionResult)" | Out-File -FilePath $LogPath -Append
+function Initialize-AzureContext {
+    try {
+        Import-Module Az.Accounts -ErrorAction Stop
+        Import-Module Az.Storage -ErrorAction Stop
+        Import-Module Az.KeyVault -ErrorAction Stop
     }
-}
-if ($DisableAccounts -and $onPremDisableErr.Count -gt 0) {
-    "" | Out-File -FilePath $LogPath -Append
-    "On-prem disable error details:" | Out-File -FilePath $LogPath -Append
-    foreach ($e in $onPremDisableErr) {
-        $u = $e.UPN; if (-not $u) { $u = $e.'UPN-mail' }; if (-not $u) { $u = $e.DisplayName_UPN }
-        "  OnPrem: $u => $($e.OnPremDisabledActionResult)" | Out-File -FilePath $LogPath -Append
+    catch {
+        throw 'Required modules Az.Accounts and Az.Storage are not installed in this environment.'
+    }
+    $ctx = $null
+    try { $ctx = Get-AzContext -ErrorAction Stop } catch { $ctx = $null }
+    if (-not $ctx) {
+        try {
+            # Prefer Managed Identity (Azure Automation / managed hosts)
+            Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
+        }
+        catch {
+            # Fallback to interactive (useful for local runs)
+            Connect-AzAccount -ErrorAction Stop | Out-Null
+        }
     }
 }
 
-"Run completed: $(Get-Date)" | Out-File -FilePath $LogPath -Append
-Write-Host "Report log written: $LogPath" -ForegroundColor Green
+function Initialize-GraphContext {
+    try {
+        Import-Module Microsoft.Graph.Users -ErrorAction Stop
+    }
+    catch {
+        throw 'Required module Microsoft.Graph.Users is not installed in this environment.'
+    }
+    try {
+        Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop | Out-Null
+    }
+    catch {
+        throw "Failed to connect to Microsoft Graph with Managed Identity. Ensure the RunAs account has required permissions (User.ReadWrite.All) and is enabled. Error: $($_.Exception.Message)"
+    }
+}
+# Centralized AD initialization
+function Initialize-OnPremAD {
+    param(
+        [string]$Server
+    )
+    if (-not $Server) { $Server = $OnPremDomainController }
+    if ($script:OnPremADReady) { return $true }
+    try {
+        if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
+            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
+        }
+        else {
+            Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
+        }
+        # Retrieve credentials from Key Vault
+        if (-not $global:AdCredential) {
+            try {
+                # Use the specified AD Key Vault directly
+                $adUser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
+                $adPassPlain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
+                if ([string]::IsNullOrWhiteSpace($adUser) -or [string]::IsNullOrWhiteSpace($adPassPlain)) { throw 'Empty AD username or password from Key Vault' }
+                $adPass = ConvertTo-SecureString $adPassPlain -AsPlainText -Force
+                $global:AdCredential = New-Object System.Management.Automation.PSCredential ($adUser, $adPass)
+            }
+            catch {
+                throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message). On-prem actions cannot proceed."
+            }
+        }
+        # Try simple query to validate connection and credentials
+        $dcParams = @{ Server = $Server; ErrorAction = 'Stop' }
+        if ($global:AdCredential) { $dcParams['Credential'] = $global:AdCredential }
+        Get-ADDomainController @dcParams | Out-Null
+
+        $script:OnPremADReady = $true
+        Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Warning "On-prem AD not available: $($_.Exception.Message)"
+        $script:OnPremADReady = $false
+        return $false
+    }
+}
