@@ -88,15 +88,18 @@ param(
     [switch]$DisableAccounts = $false
 )
 
+# Fail fast on non-terminating errors; override per-call if needed
+$ErrorActionPreference = 'Stop'
+
 # Disable-Leavers script - Process Workday leavers and disable accounts
 # Resolve system temp directory and ensure it exists
-$LocalTempDir = [System.IO.Path]::GetTempPath()
-if (-not (Test-Path $LocalTempDir)) { New-Item -ItemType Directory -Path $LocalTempDir -Force | Out-Null }
+$localtempdir = [System.IO.Path]::GetTempPath()
+if (-not (Test-Path $localtempdir)) { New-Item -ItemType Directory -Path $localtempdir -Force | Out-Null }
 
 # Timestamp once per run so CSVs are unique and not overwritten
-$ReportFilenamePattern = "Leavers_Report_-_Active_Directory_-_IT_withUPN"
+$reportfilenamepattern = "Leavers_Report_-_Active_Directory_-_IT_withUPN"
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$OutputPath = Join-Path $LocalTempDir "${ReportFilenamePattern}_${timestamp}.csv"
+$outputpath = Join-Path $localtempdir "${reportfilenamepattern}_${timestamp}.csv"
 
 # Initialize Azure and Graph contexts (Managed Identity when available)
 Initialize-AzureContext
@@ -104,38 +107,44 @@ Initialize-GraphContext
 
 # Build Azure Storage context using managed identity / connected account
 try {
-    $storageContext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -ErrorAction Stop
+    $storagecontext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -ErrorAction Stop
 }
 catch {
     throw "Failed to create storage context: $($_.Exception.Message)"
 }
-$InputPath = Join-Path $LocalTempDir (Split-Path -Leaf $BlobName)
-Write-Host "Downloading input from Azure Storage: $StorageAccountName/$ContainerName/$BlobName -> $InputPath" -ForegroundColor Cyan
-Get-AzStorageBlobContent -Container $ContainerName -Blob $BlobName -Destination $InputPath -Context $storageContext -Force | Out-Null
+$inputpath = Join-Path $localtempdir (Split-Path -Leaf $BlobName)
+Write-Host "Downloading input from Azure Storage: $StorageAccountName/$ContainerName/$BlobName -> $inputpath" -ForegroundColor Cyan
+try {
+    Get-AzStorageBlobContent -Container $ContainerName -Blob $BlobName -Destination $inputpath -Context $storagecontext -Force -ErrorAction Stop | Out-Null
+}
+catch {
+    throw "Failed to download blob '$BlobName' from container '$ContainerName' in storage account '$StorageAccountName': $($_.Exception.Message)"
+}
 
 # Graph context is already initialized above via Initialize-GraphContext
 
-Write-Host "Loading input CSV: $InputPath" -ForegroundColor Cyan
-$rows = Import-Csv -Path $InputPath
+Write-Host "Loading input CSV: $inputpath" -ForegroundColor Cyan
+$rows = Import-Csv -Path $inputpath -ErrorAction Stop
 if (-not $rows) {
-    Write-Warning "No rows loaded from CSV. Exiting."; return
+    Write-Warning "No rows loaded from CSV. Exiting."
+    return
 }
 
 Write-Host "Retrieving users from Entra ID (this may take time in large tenants)..." -ForegroundColor Cyan
 # Single directory pull (avoid N x API calls). Adjust properties as needed.
-$allUsers = Get-MgUser -All -Property id, employeeId, mail, displayName, userPrincipalName, accountEnabled -ConsistencyLevel eventual |
+$allusers = Get-MgUser -All -Property id, employeeId, mail, displayName, userPrincipalName, accountEnabled -ConsistencyLevel eventual -ErrorAction Stop |
 Select-Object id, userPrincipalName, employeeId, mail, displayName, accountEnabled
 
 # Build fast lookup hash tables (case-insensitive keys)
-$byEmployeeId = @{}
-$byMail = @{}
-$byDisplay = @{}
-foreach ($u in $allUsers) {
-    if ($u.employeeId -and -not $byEmployeeId.ContainsKey($u.employeeId)) { $byEmployeeId[$u.employeeId] = $u }
-    if ($u.mail -and -not $byMail.ContainsKey($u.mail.ToLower())) { $byMail[$u.mail.ToLower()] = $u }
+$byemployeeid = @{}
+$bymail = @{}
+$bydisplay = @{}
+foreach ($u in $allusers) {
+    if ($u.employeeId -and -not $byemployeeid.ContainsKey($u.employeeId)) { $byemployeeid[$u.employeeId] = $u }
+    if ($u.mail -and -not $bymail.ContainsKey($u.mail.ToLower())) { $bymail[$u.mail.ToLower()] = $u }
     if ($u.displayName) {
-        $dnKey = $u.displayName.ToLower()
-        if (-not $byDisplay.ContainsKey($dnKey)) { $byDisplay[$dnKey] = $u }
+    $dnkey = $u.displayName.ToLower()
+    if (-not $bydisplay.ContainsKey($dnkey)) { $bydisplay[$dnkey] = $u }
     }
 }
 
@@ -143,10 +152,10 @@ $processed = 0
 $total = $rows.Count
 foreach ($row in $rows) {
     $processed++
-    $employeeId = $row.'Employee ID'
+    $employeeid = $row.'Employee ID'
     $email = $row.'Email - Primary Work'
     # Current file uses 'Legal Name' for display name source
-    $displayName = $row.'Legal Name'
+    $displayname = $row.'Legal Name'
 
     # Ensure / (re)create output columns (idempotent with -Force)
     Add-Member -InputObject $row -NotePropertyName UPN             -NotePropertyValue $null -Force
@@ -159,8 +168,8 @@ foreach ($row in $rows) {
     $user = $null
 
     # 1. Match by employeeId (exact)
-    if ($employeeId -and $byEmployeeId.ContainsKey($employeeId)) {
-        $user = $byEmployeeId[$employeeId]
+    if ($employeeid -and $byemployeeid.ContainsKey($employeeid)) {
+        $user = $byemployeeid[$employeeid]
         $row.UPN = $user.userPrincipalName
         $row.AccountEnabled = $user.accountEnabled
         $row.MatchSource = 'EmployeeId'
@@ -168,18 +177,18 @@ foreach ($row in $rows) {
     # 2. Match by mail (case-insensitive exact)
     elseif ($email) {
         $lower = $email.ToLower()
-        if ($byMail.ContainsKey($lower)) {
-            $user = $byMail[$lower]
+        if ($bymail.ContainsKey($lower)) {
+            $user = $bymail[$lower]
             $row.'UPN-mail' = $user.userPrincipalName
             $row.AccountEnabled = $user.accountEnabled
             $row.MatchSource = 'Mail'
         }
     }
     # 3. Match by display name (case-insensitive exact)
-    if (-not $user -and $displayName) {
-        $dnKey = $displayName.ToLower()
-        if ($byDisplay.ContainsKey($dnKey)) {
-            $user = $byDisplay[$dnKey]
+    if (-not $user -and $displayname) {
+        $dnkey = $displayname.ToLower()
+        if ($bydisplay.ContainsKey($dnkey)) {
+            $user = $bydisplay[$dnkey]
             $row.DisplayName_UPN = $user.userPrincipalName
             $row.AccountEnabled = $user.accountEnabled
             $row.MatchSource = 'DisplayName'
@@ -199,23 +208,23 @@ $rows | Add-Member -NotePropertyName DisabledActionResult -NotePropertyValue $nu
 
 if ($DisableAccounts) {
     Write-Host "Disabling matched enabled cloud accounts..." -ForegroundColor Yellow
-    $matchedEnabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
+    $matchedenabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
 
     # Prepare on-prem AD context early if requested
     if (-not (Initialize-OnPremAD -Server $OnPremDomainController)) {
         Write-Warning "On-prem AD initialization failed. Only Entra ID accounts will be disabled."
-        $onPremAvailable = $false
+        $onpremavailable = $false
     } else {
-        $onPremAvailable = $true
+        $onpremavailable = $true
     }
 
-    foreach ($r in $matchedEnabled) {
-        $upnToDisable = $r.UPN
-        if (-not $upnToDisable) { $upnToDisable = $r.'UPN-mail' }
-        if (-not $upnToDisable) { $upnToDisable = $r.DisplayName_UPN }
-        if (-not $upnToDisable) { continue }
+    foreach ($r in $matchedenabled) {
+        $upntodisable = $r.UPN
+        if (-not $upntodisable) { $upntodisable = $r.'UPN-mail' }
+        if (-not $upntodisable) { $upntodisable = $r.DisplayName_UPN }
+        if (-not $upntodisable) { continue }
         try {
-            Update-MgUser -UserId $upnToDisable -AccountEnabled:$false
+            Update-MgUser -UserId $upntodisable -AccountEnabled:$false -ErrorAction Stop
             $r.DisabledActionResult = 'Disabled'
         }
         catch {
@@ -224,23 +233,24 @@ if ($DisableAccounts) {
     }
 
     # On-prem disable ALL matched accounts (even those already disabled in Entra)
-    if ($onPremAvailable) {
+    if ($onpremavailable) {
         Write-Host "Disabling matched accounts on-prem (all matched, regardless of cloud state)..." -ForegroundColor Yellow
-        $matchedAll = $rows | Where-Object { $_.MatchSource }
-        foreach ($r in $matchedAll) {
-            $upnToDisable = $r.UPN
-            if (-not $upnToDisable) { $upnToDisable = $r.'UPN-mail' }
-            if (-not $upnToDisable) { $upnToDisable = $r.DisplayName_UPN }
-            if (-not $upnToDisable) { continue }
+        $matchedall = $rows | Where-Object { $_.MatchSource }
+        foreach ($r in $matchedall) {
+            $upntodisable = $r.UPN
+            if (-not $upntodisable) { $upntodisable = $r.'UPN-mail' }
+            if (-not $upntodisable) { $upntodisable = $r.DisplayName_UPN }
+            if (-not $upntodisable) { continue }
             try {
-                $adUserParams = @{ Identity = $upnToDisable; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
-                if ($global:AdCredential) { $adUserParams['Credential'] = $global:AdCredential }
-                $adUser = $null
-                $adUser = Get-ADUser @adUserParams
-                if ($adUser.Enabled) {
-                    $disParams = @{ Identity = $adUser.DistinguishedName; Server = $OnPremDomainController; ErrorAction = 'Stop' }
-                    if ($global:AdCredential) { $disParams['Credential'] = $global:AdCredential }
-                    Disable-ADAccount @disParams
+                $aduserparams = @{ Identity = $upntodisable; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
+                $cred = Get-OnPremAdCredential
+                if ($cred) { $aduserparams['Credential'] = $cred }
+                $aduser = $null
+                $aduser = Get-ADUser @aduserparams
+                if ($aduser.Enabled) {
+                    $disparams = @{ Identity = $aduser.DistinguishedName; Server = $OnPremDomainController; ErrorAction = 'Stop' }
+                    if ($cred) { $disparams['Credential'] = $cred }
+                    Disable-ADAccount @disparams
                     $r.OnPremDisabledActionResult = 'Disabled'
                 }
                 else {
@@ -259,68 +269,72 @@ else {
 }
 
 # Reporting setup (reuse same $timestamp as output file)
-$LogPath = (Join-Path $LocalTempDir "Disable-Leavers_Report_$timestamp.log")
+$logpath = (Join-Path $localtempdir "Disable-Leavers_Report_$timestamp.log")
 # Ensure output and log directories exist
-$__pathsToEnsure = @((Split-Path -Parent $OutputPath), (Split-Path -Parent $LogPath))
-foreach ($__d in $__pathsToEnsure) { if ($__d -and -not (Test-Path $__d)) { New-Item -ItemType Directory -Path $__d -Force | Out-Null } }
-"Disable-Leavers run started: $(Get-Date)" | Out-File -FilePath $LogPath -Encoding UTF8
-"Input CSV: $InputPath" | Out-File -FilePath $LogPath -Append
-"Output CSV (will be written): $OutputPath" | Out-File -FilePath $LogPath -Append
-"DisableAccounts parameter: $DisableAccounts" | Out-File -FilePath $LogPath -Append
+$__pathstoensure = @((Split-Path -Parent $outputpath), (Split-Path -Parent $logpath))
+foreach ($__d in $__pathstoensure) { if ($__d -and -not (Test-Path $__d)) { New-Item -ItemType Directory -Path $__d -Force | Out-Null } }
+"Disable-Leavers run started: $(Get-Date)" | Out-File -FilePath $logpath -Encoding UTF8
+"Input CSV: $inputpath" | Out-File -FilePath $logpath -Append
+"Output CSV (will be written): $outputpath" | Out-File -FilePath $logpath -Append
+"DisableAccounts parameter: $DisableAccounts" | Out-File -FilePath $logpath -Append
 
-Write-Host "Writing output CSV: $OutputPath" -ForegroundColor Cyan
-$rows | Export-Csv -Path $OutputPath -NoTypeInformation
+Write-Host "Writing output CSV: $outputpath" -ForegroundColor Cyan
+$rows | Export-Csv -Path $outputpath -NoTypeInformation -ErrorAction Stop
 
 # Build list of files to send (kept in temp directory)
-$filesToSend = @($InputPath, $OutputPath, $LogPath) | Where-Object { $_ -and (Test-Path $_) }
+$filestosend = @($inputpath, $outputpath, $logpath) | Where-Object { $_ -and (Test-Path $_) }
 
 # Build report summary
 $matched = $rows | Where-Object { $_.MatchSource }
-$matchedCount = $matched.Count
-$unknownCount = $rows.Count - $matchedCount
-$bySource = $matched | Group-Object MatchSource | Select-Object Name, Count
-$disabledSuccess = @($rows | Where-Object { $_.DisabledActionResult -eq 'Disabled' })
-$disabledErrors = @($rows | Where-Object { $_.DisabledActionResult -like 'Error:*' })
-$onPremDisabled = @($rows | Where-Object { $_.OnPremDisabledActionResult -eq 'Disabled' })
-$onPremDisableErr = @($rows | Where-Object { $_.OnPremDisabledActionResult -like 'Error:*' })
-$disabledCount = $disabledSuccess.Count
-$disableErrorCount = $disabledErrors.Count
+$matchedcount = $matched.Count
+$unknowncount = $rows.Count - $matchedcount
+$bysource = $matched | Group-Object MatchSource | Select-Object Name, Count
+$disabledsuccess = @($rows | Where-Object { $_.DisabledActionResult -eq 'Disabled' })
+$disablederrors = @($rows | Where-Object { $_.DisabledActionResult -like 'Error:*' })
+$onpremdisabled = @($rows | Where-Object { $_.OnPremDisabledActionResult -eq 'Disabled' })
+$onpremdisableerr = @($rows | Where-Object { $_.OnPremDisabledActionResult -like 'Error:*' })
+$disabledcount = $disabledsuccess.Count
+$disableerrorcount = $disablederrors.Count
 
-"" | Out-File -FilePath $LogPath -Append
-"Summary:" | Out-File -FilePath $LogPath -Append
-"Total rows:        $($rows.Count)" | Out-File -FilePath $LogPath -Append
-"Matched rows:      $matchedCount" | Out-File -FilePath $LogPath -Append
-foreach ($g in $bySource) { "  Matched by $($g.Name): $($g.Count)" | Out-File -FilePath $LogPath -Append }
-"Unknown rows:      $unknownCount" | Out-File -FilePath $LogPath -Append
+"" | Out-File -FilePath $logpath -Append
+"Summary:" | Out-File -FilePath $logpath -Append
+"Total rows:        $($rows.Count)" | Out-File -FilePath $logpath -Append
+"Matched rows:      $matchedcount" | Out-File -FilePath $logpath -Append
+foreach ($g in $bysource) { "  Matched by $($g.Name): $($g.Count)" | Out-File -FilePath $logpath -Append }
+"Unknown rows:      $unknowncount" | Out-File -FilePath $logpath -Append
 if ($DisableAccounts) {
-    "Accounts disabled: $disabledCount" | Out-File -FilePath $LogPath -Append
-    "On-prem accounts disabled: $($onPremDisabled.Count)" | Out-File -FilePath $LogPath -Append
-    if ($disableErrorCount -gt 0) { "Disable errors:   $disableErrorCount" | Out-File -FilePath $LogPath -Append }
-    if ($onPremDisableErr.Count -gt 0) { "On-prem disable errors: $($onPremDisableErr.Count)" | Out-File -FilePath $LogPath -Append }
+    "Accounts disabled: $disabledcount" | Out-File -FilePath $logpath -Append
+    "On-prem accounts disabled: $($onpremdisabled.Count)" | Out-File -FilePath $logpath -Append
+    if ($disableerrorcount -gt 0) { "Disable errors:   $disableerrorcount" | Out-File -FilePath $logpath -Append }
+    if ($onpremdisableerr.Count -gt 0) { "On-prem disable errors: $($onpremdisableerr.Count)" | Out-File -FilePath $logpath -Append }
 }
 else {
-    "DisableAccounts is false - no accounts were disabled" | Out-File -FilePath $LogPath -Append
+    "DisableAccounts is false - no accounts were disabled" | Out-File -FilePath $logpath -Append
 }
 
-if ($DisableAccounts -and $disableErrorCount -gt 0) {
-    "" | Out-File -FilePath $LogPath -Append
-    "Disable error details:" | Out-File -FilePath $LogPath -Append
-    foreach ($e in $disabledErrors) {
-        $u = $e.UPN; if (-not $u) { $u = $e.'UPN-mail' }; if (-not $u) { $u = $e.DisplayName_UPN }
-        "  Cloud: $u => $($e.DisabledActionResult)" | Out-File -FilePath $LogPath -Append
+if ($DisableAccounts -and $disableerrorcount -gt 0) {
+    "" | Out-File -FilePath $logpath -Append
+    "Disable error details:" | Out-File -FilePath $logpath -Append
+    foreach ($e in $disablederrors) {
+    $u = $e.UPN
+    if (-not $u) { $u = $e.'UPN-mail' }
+    if (-not $u) { $u = $e.DisplayName_UPN }
+    "  Cloud: $u => $($e.DisabledActionResult)" | Out-File -FilePath $logpath -Append
     }
 }
-if ($DisableAccounts -and $onPremDisableErr.Count -gt 0) {
-    "" | Out-File -FilePath $LogPath -Append
-    "On-prem disable error details:" | Out-File -FilePath $LogPath -Append
-    foreach ($e in $onPremDisableErr) {
-        $u = $e.UPN; if (-not $u) { $u = $e.'UPN-mail' }; if (-not $u) { $u = $e.DisplayName_UPN }
-        "  OnPrem: $u => $($e.OnPremDisabledActionResult)" | Out-File -FilePath $LogPath -Append
+if ($DisableAccounts -and $onpremdisableerr.Count -gt 0) {
+    "" | Out-File -FilePath $logpath -Append
+    "On-prem disable error details:" | Out-File -FilePath $logpath -Append
+    foreach ($e in $onpremdisableerr) {
+    $u = $e.UPN
+    if (-not $u) { $u = $e.'UPN-mail' }
+    if (-not $u) { $u = $e.DisplayName_UPN }
+    "  OnPrem: $u => $($e.OnPremDisabledActionResult)" | Out-File -FilePath $logpath -Append
     }
 }
 
-"Run completed: $(Get-Date)" | Out-File -FilePath $LogPath -Append
-Write-Host "Report log written: $LogPath" -ForegroundColor Green
+"Run completed: $(Get-Date)" | Out-File -FilePath $logpath -Append
+Write-Host "Report log written: $logpath" -ForegroundColor Green
 
 
 #all the functions:
@@ -356,8 +370,9 @@ function Send-ReportViaSendGrid {
         [string]$Endpoint,
         [string[]]$AttachmentPaths
     )
-    $toArray = @(); foreach ($r in $Recipients) { if (-not [string]::IsNullOrWhiteSpace($r)) { $toArray += @{ email = $r.Trim() } } }
-    if ($toArray.Count -eq 0) { throw 'No valid recipient email addresses specified.' }
+    $toarray = @()
+    foreach ($r in $Recipients) { if (-not [string]::IsNullOrWhiteSpace($r)) { $toarray += @{ email = $r.Trim() } } }
+    if ($toarray.Count -eq 0) { throw 'No valid recipient email addresses specified.' }
     $attachments = @()
     foreach ($p in $AttachmentPaths) {
         try {
@@ -369,14 +384,14 @@ function Send-ReportViaSendGrid {
             Write-Warning "Failed to attach file '$p': $($_.Exception.Message)"
         }
     }
-    $bodyObj = @{ 
-        personalizations = @(@{ to = $toArray; subject = $Subject })
+    $bodyobj = @{ 
+        personalizations = @(@{ to = $toarray; subject = $Subject })
         from             = @{ email = $FromEmail }
         content          = @(@{ type = 'text/plain'; value = "Leavers disable run completed at $(Get-Date). See attached output CSV and log." })
         attachments      = $attachments
     }
     $headers = @{ Authorization = "Bearer $ApiKey" }
-    $json = $bodyObj | ConvertTo-Json -Depth 10
+    $json = $bodyobj | ConvertTo-Json -Depth 10
     try {
         Invoke-RestMethod -Method Post -Uri $Endpoint -Headers $headers -Body $json -ContentType 'application/json' -ErrorAction Stop | Out-Null
         Write-Host 'SendGrid report email sent.' -ForegroundColor Green
@@ -388,9 +403,9 @@ function Send-ReportViaSendGrid {
 
 try {
     # Use the specified Secrets Key Vault directly
-    $apiKey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
-    $fixedSubject = 'disabling leavers report'
-    Send-ReportViaSendGrid -ApiKey $apiKey -FromEmail $SendGridSenderEmailAddress -Recipients $SendGridRecipientEmailAddresses -Subject $fixedSubject -Endpoint $SendGridApiEndpoint -AttachmentPaths $filesToSend
+    $apikey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
+    $fixedsubject = 'disabling leavers report'
+    Send-ReportViaSendGrid -ApiKey $apikey -FromEmail $SendGridSenderEmailAddress -Recipients $SendGridRecipientEmailAddresses -Subject $fixedsubject -Endpoint $SendGridApiEndpoint -AttachmentPaths $filestosend
 }
 catch {
     Write-Warning $_
@@ -449,24 +464,11 @@ function Initialize-OnPremAD {
         else {
             Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
         }
-        # Retrieve credentials from Key Vault
-        if (-not $global:AdCredential) {
-            try {
-                # Use the specified AD Key Vault directly
-                $adUser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
-                $adPassPlain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
-                if ([string]::IsNullOrWhiteSpace($adUser) -or [string]::IsNullOrWhiteSpace($adPassPlain)) { throw 'Empty AD username or password from Key Vault' }
-                $adPass = ConvertTo-SecureString $adPassPlain -AsPlainText -Force
-                $global:AdCredential = New-Object System.Management.Automation.PSCredential ($adUser, $adPass)
-            }
-            catch {
-                throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message). On-prem actions cannot proceed."
-            }
-        }
-        # Try simple query to validate connection and credentials
-        $dcParams = @{ Server = $Server; ErrorAction = 'Stop' }
-        if ($global:AdCredential) { $dcParams['Credential'] = $global:AdCredential }
-        Get-ADDomainController @dcParams | Out-Null
+    # Retrieve credentials (lazy) and validate connection
+    $dcparams = @{ Server = $Server; ErrorAction = 'Stop' }
+    $cred = Get-OnPremAdCredential
+    if ($cred) { $dcparams['Credential'] = $cred }
+        Get-ADDomainController @dcparams | Out-Null
 
         $script:OnPremADReady = $true
         Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
@@ -476,5 +478,21 @@ function Initialize-OnPremAD {
         Write-Warning "On-prem AD not available: $($_.Exception.Message)"
         $script:OnPremADReady = $false
         return $false
+    }
+}
+
+# Lazily retrieve and cache on-prem AD credentials (script scope)
+function Get-OnPremAdCredential {
+    if ($script:AdCredential) { return $script:AdCredential }
+    try {
+    $aduser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
+    $adpassplain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($aduser) -or [string]::IsNullOrWhiteSpace($adpassplain)) { throw 'Empty AD username or password from Key Vault' }
+    $adpass = ConvertTo-SecureString $adpassplain -AsPlainText -Force
+    $script:AdCredential = New-Object System.Management.Automation.PSCredential ($aduser, $adpass)
+        return $script:AdCredential
+    }
+    catch {
+        throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message)."
     }
 }
