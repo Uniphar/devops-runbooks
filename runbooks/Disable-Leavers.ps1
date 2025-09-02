@@ -132,8 +132,10 @@ if (-not $rows) {
 
 Write-Host "Retrieving users from Entra ID (this may take time in large tenants)..." -ForegroundColor Cyan
 # Single directory pull (avoid N x API calls). Adjust properties as needed.
-$allusers = Get-MgUser -All -Property id, employeeId, mail, displayName, userPrincipalName, accountEnabled -ConsistencyLevel eventual -ErrorAction Stop |
-Select-Object id, userPrincipalName, employeeId, mail, displayName, accountEnabled
+$allusers = Invoke-WithRetry -Script {
+    Get-MgUser -All -Property id, employeeId, mail, displayName, userPrincipalName, accountEnabled -ConsistencyLevel eventual -ErrorAction Stop |
+    Select-Object id, userPrincipalName, employeeId, mail, displayName, accountEnabled
+}
 
 # Build fast lookup hash tables (case-insensitive keys)
 $byemployeeid = @{}
@@ -224,7 +226,7 @@ if ($DisableAccounts) {
         if (-not $upntodisable) { $upntodisable = $r.DisplayName_UPN }
         if (-not $upntodisable) { continue }
         try {
-            Update-MgUser -UserId $upntodisable -AccountEnabled:$false -ErrorAction Stop
+            Invoke-WithRetry -Script { Update-MgUser -UserId $upntodisable -AccountEnabled:$false -ErrorAction Stop } | Out-Null
             $r.DisabledActionResult = 'Disabled'
         }
         catch {
@@ -494,5 +496,36 @@ function Get-OnPremAdCredential {
     }
     catch {
         throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message)."
+    }
+}
+
+# Simple retry helper with exponential backoff and optional Retry-After header support
+function Invoke-WithRetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ScriptBlock]$Script,
+        [int]$MaxAttempts = 5,
+        [int]$BaseDelaySeconds = 1
+    )
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            return & $Script
+        }
+        catch {
+            if ($attempt -ge $MaxAttempts) { throw }
+            $ex = $_.Exception
+            # Default exponential backoff
+            $delay = [math]::Min(60, [int]([math]::Pow(2, $attempt - 1) * $BaseDelaySeconds))
+            # If error contains Retry-After, honor it when larger
+            $retryAfter = $null
+            if ($ex.Response -and $ex.Response.Headers -and $ex.Response.Headers['Retry-After']) {
+                [int]::TryParse($ex.Response.Headers['Retry-After'], [ref]$retryAfter) | Out-Null
+                if ($retryAfter -and $retryAfter -gt $delay) { $delay = $retryAfter }
+            }
+            Write-Warning "Attempt $attempt failed: $($ex.Message). Retrying in ${delay}s..."
+            Start-Sleep -Seconds $delay
+        }
     }
 }
