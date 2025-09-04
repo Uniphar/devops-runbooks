@@ -91,6 +91,296 @@ param(
 # Fail fast on non-terminating errors; override per-call if needed
 $ErrorActionPreference = 'Stop'
 
+# --- Function definitions moved here (all functions) ---
+
+# Ensure required modules are installed (best-effort, non-interactive)
+function Ensure-RequiredModules {
+    param(
+        [string[]]$ModuleNames = @('Az.Accounts','Az.Storage','Az.KeyVault','Microsoft.Graph')
+    )
+
+    Write-Host "Checking and installing required PowerShell modules: $($ModuleNames -join ', ')" -ForegroundColor Cyan
+
+    # Ensure NuGet provider available for older systems
+    try {
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
+    catch {
+        Write-Warning "Could not ensure NuGet provider: $($_.Exception.Message)"
+    }
+
+    # Ensure PSGallery repository exists
+    try {
+        $psGallery = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+        if (-not $psGallery) {
+            Write-Host 'Registering PSGallery repository (untrusted by default).' -ForegroundColor Yellow
+            Register-PSRepository -Default -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
+    catch {
+        Write-Warning "Could not register PSGallery repository: $($_.Exception.Message)"
+    }
+
+    foreach ($m in $ModuleNames) {
+        try {
+            if (Get-Module -ListAvailable -Name $m -ErrorAction SilentlyContinue) {
+                Write-Host "Module '$m' already available." -ForegroundColor DarkGray
+                continue
+            }
+
+            Write-Host "Installing module '$m' to CurrentUser scope (best-effort)." -ForegroundColor Cyan
+            Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+            Write-Host "Installed module '$m'." -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to install module '$m': $($_.Exception.Message)"
+        }
+    }
+
+    # ActiveDirectory (RSAT) is not always available via PSGallery. Try Windows capability as a best-effort on Windows hosts.
+    try {
+        if (-not (Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
+            if ($IsWindows -and (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue)) {
+                Write-Host 'ActiveDirectory module not found. Attempting to enable RSAT ActiveDirectory capability (requires admin).' -ForegroundColor Yellow
+                try {
+                    Add-WindowsCapability -Online -Name 'Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0' -ErrorAction Stop | Out-Null
+                    Write-Host 'Requested RSAT ActiveDirectory capability install. Module may be available after reboot/logon.' -ForegroundColor Green
+                }
+                catch {
+                    Write-Warning "Could not install RSAT ActiveDirectory via Add-WindowsCapability: $($_.Exception.Message)"
+                }
+            }
+            else {
+                Write-Warning 'ActiveDirectory module not found. On non-Windows or restricted hosts this must be provided by the environment (RSAT or Hybrid Worker image).'
+            }
+        }
+    }
+    catch {
+        Write-Warning "ActiveDirectory availability check failed: $($_.Exception.Message)"
+    }
+}
+
+# Fetch SendGrid API key from Key Vault and send email with attachments
+function Get-SecretFromKeyVault {
+    param([string]$VaultName, [string]$SecretName)
+    try {
+        return (Get-AzKeyVaultSecret -VaultName $VaultName -Name $SecretName -AsPlainText -ErrorAction Stop)
+    }
+    catch {
+        throw "Unable to retrieve secret '$SecretName' from Key Vault '$VaultName': $($_.Exception.Message)"
+    }
+}
+
+function Get-MimeTypeForFile {
+    param([string]$Path)
+    $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+    switch ($ext) {
+        '.csv' { 'text/csv'; break }
+        '.log' { 'text/plain'; break }
+        '.txt' { 'text/plain'; break }
+        default { 'application/octet-stream' }
+    }
+}
+
+function Send-ReportViaSendGrid {
+    param(
+        [string]$ApiKey,
+        [string]$FromEmail,
+        $Recipients,
+        [string]$Subject,
+        [string]$Endpoint,
+        $AttachmentPaths
+    )
+    Write-Host "SendGrid function called." -ForegroundColor Gray
+
+    # --- Normalize Recipients into an array of PSCustomObject with an 'email' property ---
+    $RecipientArray = @()
+    if ($null -eq $Recipients) {
+        $RecipientArray = @()
+    }
+    elseif ($Recipients -is [string]) {
+        # Accept comma, semicolon or newline separated lists
+        $RecipientArray = ($Recipients -split '[,;\r\n]') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    }
+    elseif ($Recipients -is [System.Collections.IEnumerable]) {
+        $RecipientArray = $Recipients | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }
+    }
+    else {
+        $RecipientArray = @($Recipients.ToString().Trim())
+    }
+
+    $toarray = @()
+    foreach ($r in $RecipientArray) {
+        if (-not [string]::IsNullOrWhiteSpace($r)) {
+            $toarray += [PSCustomObject]@{ email = $r }
+        }
+    }
+    if ($toarray.Count -eq 0) { throw 'No valid recipient email addresses specified.' }
+
+    # --- Normalize AttachmentPaths into an array of strings ---
+    $AttachmentArray = @()
+    if ($null -ne $AttachmentPaths) {
+        if ($AttachmentPaths -is [string]) { $AttachmentArray = @($AttachmentPaths) }
+        elseif ($AttachmentPaths -is [System.Collections.IEnumerable]) { $AttachmentArray = $AttachmentPaths }
+        else { $AttachmentArray = @($AttachmentPaths.ToString()) }
+    }
+
+    $attachments = @()
+    foreach ($p in $AttachmentArray) {
+        try {
+            if (-not (Test-Path $p)) { Write-Warning "Attachment path not found: $p"; continue }
+            $bytes = [System.IO.File]::ReadAllBytes($p)
+            $b64 = [System.Convert]::ToBase64String($bytes)
+            $attachments += [PSCustomObject]@{
+                content     = $b64
+                filename    = (Split-Path -Leaf $p)
+                type        = (Get-MimeTypeForFile -Path $p)
+                disposition = 'attachment'
+            }
+        }
+        catch {
+            Write-Warning "Failed to attach file '$p': $($_.Exception.Message)"
+        }
+    }
+    $bodyobj = @{ 
+        personalizations = @(@{ to = $toarray; subject = $Subject })
+        from             = @{ email = $FromEmail }
+        content          = @(@{ type = 'text/plain'; value = "Leavers disable run completed at $(Get-Date). See attached output CSV and log." })
+        attachments      = $attachments
+    }
+    $headers = @{ Authorization = "Bearer $ApiKey" }
+    $json = $bodyobj | ConvertTo-Json -Depth 10
+    try {
+        Invoke-RestMethod -Method Post -Uri $Endpoint -Headers $headers -Body $json -ContentType 'application/json' -ErrorAction Stop | Out-Null
+        Write-Host 'SendGrid report email sent.' -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Failed to send SendGrid email: $($_.Exception.Message)"
+    }
+}
+
+function Initialize-AzureContext {
+    try {
+        Import-Module Az.Accounts -ErrorAction Stop
+        Import-Module Az.Storage -ErrorAction Stop
+        Import-Module Az.KeyVault -ErrorAction Stop
+    }
+    catch {
+        throw 'Required modules Az.Accounts and Az.Storage are not installed in this environment.'
+    }
+    $ctx = $null
+    try { $ctx = Get-AzContext -ErrorAction Stop } catch { $ctx = $null }
+    if (-not $ctx) {
+        try {
+            # Prefer Managed Identity (Azure Automation / managed hosts)
+            Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
+        }
+        catch {
+            # Fallback to interactive (useful for local runs)
+            Connect-AzAccount -ErrorAction Stop | Out-Null
+        }
+    }
+}
+
+function Initialize-GraphContext {
+    try {
+        Import-Module Microsoft.Graph.Users -ErrorAction Stop
+    }
+    catch {
+        throw 'Required module Microsoft.Graph.Users is not installed in this environment.'
+    }
+    try {
+        Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop | Out-Null
+    }
+    catch {
+        throw "Failed to connect to Microsoft Graph with Managed Identity. Ensure the RunAs account has required permissions (User.ReadWrite.All) and is enabled. Error: $($_.Exception.Message)"
+    }
+}
+
+# Centralized AD initialization
+function Initialize-OnPremAD {
+    param(
+        [string]$Server
+    )
+    if (-not $Server) { $Server = $OnPremDomainController }
+    if ($script:OnPremADReady) { return $true }
+    try {
+        if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
+            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
+        }
+        else {
+            Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
+        }
+    # Retrieve credentials (lazy) and validate connection
+    $dcparams = @{ Server = $Server; ErrorAction = 'Stop' }
+    $cred = Get-OnPremAdCredential
+    if ($cred) { $dcparams['Credential'] = $cred }
+        Get-ADDomainController @dcparams | Out-Null
+
+        $script:OnPremADReady = $true
+        Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Warning "On-prem AD not available: $($_.Exception.Message)"
+        $script:OnPremADReady = $false
+        return $false
+    }
+}
+
+# Lazily retrieve and cache on-prem AD credentials (script scope)
+function Get-OnPremAdCredential {
+    if ($script:AdCredential) { return $script:AdCredential }
+    try {
+    $aduser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
+    $adpassplain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($aduser) -or [string]::IsNullOrWhiteSpace($adpassplain)) { throw 'Empty AD username or password from Key Vault' }
+    $adpass = ConvertTo-SecureString $adpassplain -AsPlainText -Force
+    $script:AdCredential = New-Object System.Management.Automation.PSCredential ($aduser, $adpass)
+        return $script:AdCredential
+    }
+    catch {
+        throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message)."
+    }
+}
+
+# Simple retry helper with exponential backoff and optional Retry-After header support
+function Invoke-WithRetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ScriptBlock]$Script,
+        [int]$MaxAttempts = 5,
+        [int]$BaseDelaySeconds = 1
+    )
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            return & $Script
+        }
+        catch {
+            if ($attempt -ge $MaxAttempts) { throw }
+            $ex = $_.Exception
+            # Default exponential backoff
+            $delay = [math]::Min(60, [int]([math]::Pow(2, $attempt - 1) * $BaseDelaySeconds))
+            # If error contains Retry-After, honor it when larger
+            $retryAfter = $null
+            if ($ex.Response -and $ex.Response.Headers -and $ex.Response.Headers['Retry-After']) {
+                [int]::TryParse($ex.Response.Headers['Retry-After'], [ref]$retryAfter) | Out-Null
+                if ($retryAfter -and $retryAfter -gt $delay) { $delay = $retryAfter }
+            }
+            Write-Warning "Attempt $attempt failed: $($ex.Message). Retrying in ${delay}s..."
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
+# --- End moved functions ---
+
 # Handle recipient email addresses - Azure Automation may pass as string or array
 if ($SendGridRecipientEmailAddresses -is [string]) {
     # Convert comma-separated string to array
@@ -134,6 +424,10 @@ if (-not (Test-Path $localtempdir)) { New-Item -ItemType Directory -Path $localt
 $reportfilenamepattern = "Leavers_Report_-_Active_Directory_-_IT_withUPN"
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $outputpath = Join-Path $localtempdir "${reportfilenamepattern}_${timestamp}.csv"
+
+# Initialize Azure and Graph contexts (Managed Identity when available)
+# Ensure required modules are present (best-effort installer)
+Ensure-RequiredModules
 
 # Initialize Azure and Graph contexts (Managed Identity when available)
 Initialize-AzureContext
@@ -376,233 +670,3 @@ if ($DisableAccountsBool -and $onpremdisableerr.Count -gt 0) {
 Write-Host "Report log written: $logpath" -ForegroundColor Green
 
 
-#all the functions:
-
-# Fetch SendGrid API key from Key Vault and send email with attachments
-function Get-SecretFromKeyVault {
-    param([string]$VaultName, [string]$SecretName)
-    try {
-        return (Get-AzKeyVaultSecret -VaultName $VaultName -Name $SecretName -AsPlainText -ErrorAction Stop)
-    }
-    catch {
-        throw "Unable to retrieve secret '$SecretName' from Key Vault '$VaultName': $($_.Exception.Message)"
-    }
-}
-
-function Get-MimeTypeForFile {
-    param([string]$Path)
-    $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
-    switch ($ext) {
-        '.csv' { 'text/csv'; break }
-        '.log' { 'text/plain'; break }
-        '.txt' { 'text/plain'; break }
-        default { 'application/octet-stream' }
-    }
-}
-
-function Send-ReportViaSendGrid {
-    param(
-        [string]$ApiKey,
-        [string]$FromEmail,
-        $Recipients,
-        [string]$Subject,
-        [string]$Endpoint,
-        $AttachmentPaths
-    )
-    Write-Host "SendGrid function called." -ForegroundColor Gray
-
-    # --- Normalize Recipients into an array of PSCustomObject with an 'email' property ---
-    $RecipientArray = @()
-    if ($null -eq $Recipients) {
-        $RecipientArray = @()
-    }
-    elseif ($Recipients -is [string]) {
-        # Accept comma, semicolon or newline separated lists
-        $RecipientArray = ($Recipients -split '[,;\r\n]') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-    }
-    elseif ($Recipients -is [System.Collections.IEnumerable]) {
-        $RecipientArray = $Recipients | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }
-    }
-    else {
-        $RecipientArray = @($Recipients.ToString().Trim())
-    }
-
-    $toarray = @()
-    foreach ($r in $RecipientArray) {
-        if (-not [string]::IsNullOrWhiteSpace($r)) {
-            $toarray += [PSCustomObject]@{ email = $r }
-        }
-    }
-    if ($toarray.Count -eq 0) { throw 'No valid recipient email addresses specified.' }
-
-    # --- Normalize AttachmentPaths into an array of strings ---
-    $AttachmentArray = @()
-    if ($null -ne $AttachmentPaths) {
-        if ($AttachmentPaths -is [string]) { $AttachmentArray = @($AttachmentPaths) }
-        elseif ($AttachmentPaths -is [System.Collections.IEnumerable]) { $AttachmentArray = $AttachmentPaths }
-        else { $AttachmentArray = @($AttachmentPaths.ToString()) }
-    }
-
-    $attachments = @()
-    foreach ($p in $AttachmentArray) {
-        try {
-            if (-not (Test-Path $p)) { Write-Warning "Attachment path not found: $p"; continue }
-            $bytes = [System.IO.File]::ReadAllBytes($p)
-            $b64 = [System.Convert]::ToBase64String($bytes)
-            $attachments += [PSCustomObject]@{
-                content     = $b64
-                filename    = (Split-Path -Leaf $p)
-                type        = (Get-MimeTypeForFile -Path $p)
-                disposition = 'attachment'
-            }
-        }
-        catch {
-            Write-Warning "Failed to attach file '$p': $($_.Exception.Message)"
-        }
-    }
-    $bodyobj = @{ 
-        personalizations = @(@{ to = $toarray; subject = $Subject })
-        from             = @{ email = $FromEmail }
-        content          = @(@{ type = 'text/plain'; value = "Leavers disable run completed at $(Get-Date). See attached output CSV and log." })
-        attachments      = $attachments
-    }
-    $headers = @{ Authorization = "Bearer $ApiKey" }
-    $json = $bodyobj | ConvertTo-Json -Depth 10
-    try {
-        Invoke-RestMethod -Method Post -Uri $Endpoint -Headers $headers -Body $json -ContentType 'application/json' -ErrorAction Stop | Out-Null
-        Write-Host 'SendGrid report email sent.' -ForegroundColor Green
-    }
-    catch {
-        Write-Warning "Failed to send SendGrid email: $($_.Exception.Message)"
-    }
-}
-
-try {
-    # Use the specified Secrets Key Vault directly
-    $apikey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
-    $fixedsubject = 'disabling leavers report'
-    
-    Write-Host "Sending email report with $($RecipientEmailArray.Count) recipients and $($filestosend.Count) attachments" -ForegroundColor Cyan
-    Send-ReportViaSendGrid -ApiKey $apikey -FromEmail $SendGridSenderEmailAddress -Recipients $RecipientEmailArray -Subject $fixedsubject -Endpoint $SendGridApiEndpoint -AttachmentPaths $filestosend
-}
-catch {
-    Write-Warning "Email sending failed: $($_.Exception.Message)"
-    Write-Warning "Full error details: $_"
-}
-
-function Initialize-AzureContext {
-    try {
-        Import-Module Az.Accounts -ErrorAction Stop
-        Import-Module Az.Storage -ErrorAction Stop
-        Import-Module Az.KeyVault -ErrorAction Stop
-    }
-    catch {
-        throw 'Required modules Az.Accounts and Az.Storage are not installed in this environment.'
-    }
-    $ctx = $null
-    try { $ctx = Get-AzContext -ErrorAction Stop } catch { $ctx = $null }
-    if (-not $ctx) {
-        try {
-            # Prefer Managed Identity (Azure Automation / managed hosts)
-            Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
-        }
-        catch {
-            # Fallback to interactive (useful for local runs)
-            Connect-AzAccount -ErrorAction Stop | Out-Null
-        }
-    }
-}
-
-function Initialize-GraphContext {
-    try {
-        Import-Module Microsoft.Graph.Users -ErrorAction Stop
-    }
-    catch {
-        throw 'Required module Microsoft.Graph.Users is not installed in this environment.'
-    }
-    try {
-        Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop | Out-Null
-    }
-    catch {
-        throw "Failed to connect to Microsoft Graph with Managed Identity. Ensure the RunAs account has required permissions (User.ReadWrite.All) and is enabled. Error: $($_.Exception.Message)"
-    }
-}
-# Centralized AD initialization
-function Initialize-OnPremAD {
-    param(
-        [string]$Server
-    )
-    if (-not $Server) { $Server = $OnPremDomainController }
-    if ($script:OnPremADReady) { return $true }
-    try {
-        if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
-        if ($PSVersionTable.PSEdition -eq 'Core') {
-            # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
-            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
-        }
-        else {
-            Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
-        }
-    # Retrieve credentials (lazy) and validate connection
-    $dcparams = @{ Server = $Server; ErrorAction = 'Stop' }
-    $cred = Get-OnPremAdCredential
-    if ($cred) { $dcparams['Credential'] = $cred }
-        Get-ADDomainController @dcparams | Out-Null
-
-        $script:OnPremADReady = $true
-        Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Warning "On-prem AD not available: $($_.Exception.Message)"
-        $script:OnPremADReady = $false
-        return $false
-    }
-}
-
-# Lazily retrieve and cache on-prem AD credentials (script scope)
-function Get-OnPremAdCredential {
-    if ($script:AdCredential) { return $script:AdCredential }
-    try {
-    $aduser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
-    $adpassplain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace($aduser) -or [string]::IsNullOrWhiteSpace($adpassplain)) { throw 'Empty AD username or password from Key Vault' }
-    $adpass = ConvertTo-SecureString $adpassplain -AsPlainText -Force
-    $script:AdCredential = New-Object System.Management.Automation.PSCredential ($aduser, $adpass)
-        return $script:AdCredential
-    }
-    catch {
-        throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message)."
-    }
-}
-
-# Simple retry helper with exponential backoff and optional Retry-After header support
-function Invoke-WithRetry {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][ScriptBlock]$Script,
-        [int]$MaxAttempts = 5,
-        [int]$BaseDelaySeconds = 1
-    )
-    $attempt = 0
-    while ($true) {
-        $attempt++
-        try {
-            return & $Script
-        }
-        catch {
-            if ($attempt -ge $MaxAttempts) { throw }
-            $ex = $_.Exception
-            # Default exponential backoff
-            $delay = [math]::Min(60, [int]([math]::Pow(2, $attempt - 1) * $BaseDelaySeconds))
-            # If error contains Retry-After, honor it when larger
-            $retryAfter = $null
-            if ($ex.Response -and $ex.Response.Headers -and $ex.Response.Headers['Retry-After']) {
-                [int]::TryParse($ex.Response.Headers['Retry-After'], [ref]$retryAfter) | Out-Null
-                if ($retryAfter -and $retryAfter -gt $delay) { $delay = $retryAfter }
-            }
-            Write-Warning "Attempt $attempt failed: $($ex.Message). Retrying in ${delay}s..."
-            Start-Sleep -Seconds $delay
-        }
-    }
-}
