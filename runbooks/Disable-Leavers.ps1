@@ -85,7 +85,7 @@ param(
     [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")]
     [string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
     [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")]
-    [switch]$DisableAccounts = $false
+    $DisableAccounts = $false
 )
 
 # Fail fast on non-terminating errors; override per-call if needed
@@ -106,6 +106,24 @@ if ($SendGridRecipientEmailAddresses -is [string]) {
 # Ensure RecipientEmailArray is properly initialized as an array
 $RecipientEmailArray = @($RecipientEmailArray)
 Write-Host "Recipients processed: $($RecipientEmailArray.Count) addresses" -ForegroundColor Green
+
+# Coerce DisableAccounts to boolean. Azure Automation may pass it as a string.
+$DisableAccountsBool = $false
+if ($DisableAccounts -is [string]) {
+    switch ($DisableAccounts.Trim().ToLower()) {
+        '1' { $DisableAccountsBool = $true; break }
+        'true' { $DisableAccountsBool = $true; break }
+        'yes' { $DisableAccountsBool = $true; break }
+        '0' { $DisableAccountsBool = $false; break }
+        'false' { $DisableAccountsBool = $false; break }
+        'no' { $DisableAccountsBool = $false; break }
+        default { $DisableAccountsBool = $false }
+    }
+}
+elseif ($DisableAccounts -is [bool]) { $DisableAccountsBool = $DisableAccounts }
+elseif ($DisableAccounts -is [int]) { $DisableAccountsBool = ([int]$DisableAccounts -ne 0) }
+else { $DisableAccountsBool = [bool]$DisableAccounts }
+Write-Host "DisableAccounts coerced to boolean: $DisableAccountsBool" -ForegroundColor Green
 
 # Disable-Leavers script - Process Workday leavers and disable accounts
 # Resolve system temp directory and ensure it exists
@@ -224,7 +242,7 @@ foreach ($row in $rows) {
 # After matching loop, disable matched enabled accounts if DisableAccounts switch is enabled
 $rows | Add-Member -NotePropertyName DisabledActionResult -NotePropertyValue $null -Force
 
-if ($DisableAccounts) {
+if ($DisableAccountsBool) {
     Write-Host "Disabling matched enabled cloud accounts..." -ForegroundColor Yellow
     $matchedenabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
 
@@ -294,7 +312,7 @@ foreach ($__d in $__pathstoensure) { if ($__d -and -not (Test-Path $__d)) { New-
 "Disable-Leavers run started: $(Get-Date)" | Out-File -FilePath $logpath -Encoding UTF8
 "Input CSV: $inputpath" | Out-File -FilePath $logpath -Append
 "Output CSV (will be written): $outputpath" | Out-File -FilePath $logpath -Append
-"DisableAccounts parameter: $DisableAccounts" | Out-File -FilePath $logpath -Append
+"DisableAccounts parameter: $DisableAccounts (coerced: $DisableAccountsBool)" | Out-File -FilePath $logpath -Append
 
 Write-Host "Writing output CSV: $outputpath" -ForegroundColor Cyan
 $rows | Export-Csv -Path $outputpath -NoTypeInformation -ErrorAction Stop
@@ -323,7 +341,7 @@ $disableerrorcount = $disablederrors.Count
 "Matched rows:      $matchedcount" | Out-File -FilePath $logpath -Append
 foreach ($g in $bysource) { "  Matched by $($g.Name): $($g.Count)" | Out-File -FilePath $logpath -Append }
 "Unknown rows:      $unknowncount" | Out-File -FilePath $logpath -Append
-if ($DisableAccounts) {
+if ($DisableAccountsBool) {
     "Accounts disabled: $disabledcount" | Out-File -FilePath $logpath -Append
     "On-prem accounts disabled: $($onpremdisabled.Count)" | Out-File -FilePath $logpath -Append
     if ($disableerrorcount -gt 0) { "Disable errors:   $disableerrorcount" | Out-File -FilePath $logpath -Append }
@@ -333,7 +351,7 @@ else {
     "DisableAccounts is false - no accounts were disabled" | Out-File -FilePath $logpath -Append
 }
 
-if ($DisableAccounts -and $disableerrorcount -gt 0) {
+if ($DisableAccountsBool -and $disableerrorcount -gt 0) {
     "" | Out-File -FilePath $logpath -Append
     "Disable error details:" | Out-File -FilePath $logpath -Append
     foreach ($e in $disablederrors) {
@@ -343,7 +361,7 @@ if ($DisableAccounts -and $disableerrorcount -gt 0) {
     "  Cloud: $u => $($e.DisabledActionResult)" | Out-File -FilePath $logpath -Append
     }
 }
-if ($DisableAccounts -and $onpremdisableerr.Count -gt 0) {
+if ($DisableAccountsBool -and $onpremdisableerr.Count -gt 0) {
     "" | Out-File -FilePath $logpath -Append
     "On-prem disable error details:" | Out-File -FilePath $logpath -Append
     foreach ($e in $onpremdisableerr) {
