@@ -52,7 +52,7 @@ The email subject is fixed: "disabling leavers report".
 pwsh -File .\runbooks\Disable-Leavers.ps1 -StorageAccountName unipharsftp -ContainerName workday -BlobName 'Leavers_Report_-_Active_Directory_-_IT.csv' -OnPremDomainController unidc10.uniphar.local -OnPremAdUsernameSecretName <usernameSecret> -OnPremAdPassSecretName <passwordSecret> -AdKeyVaultName <adKeyVaultName> -SecretsKeyVaultName <secretsKeyVaultName> -SendGridApiKeySecretName <sendGridSecret> -SendGridSenderEmailAddress <senderEmail> -SendGridRecipientEmailAddresses <recipientEmails> -DisableAccounts
 
 .REQUIREMENTS
-- Microsoft Graph PowerShell with User.ReadWrite.All permissions
+- Microsoft Graph PowerShell with User.connReadWrite.All permissions
 - Az.Accounts, Az.Storage, Az.KeyVault modules with Managed Identity access to Storage and Key Vault
 - RSAT ActiveDirectory module and Hybrid Runbook Worker network connectivity to on-premises DCs
 - SendGrid API key for email notifications
@@ -81,7 +81,7 @@ param(
     [Parameter(Mandatory = $true, HelpMessage = "Enter the sender email address for SendGrid (e.g., 'noreply@uniphar.ie')")]
     [string]$SendGridSenderEmailAddress,
     [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")]
-    [string[]]$SendGridRecipientEmailAddresses,
+    $SendGridRecipientEmailAddresses,
     [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")]
     [string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
     [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")]
@@ -90,6 +90,22 @@ param(
 
 # Fail fast on non-terminating errors; override per-call if needed
 $ErrorActionPreference = 'Stop'
+
+# Handle recipient email addresses - Azure Automation may pass as string or array
+if ($SendGridRecipientEmailAddresses -is [string]) {
+    # Convert comma-separated string to array
+    $RecipientEmailArray = $SendGridRecipientEmailAddresses -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+} elseif ($SendGridRecipientEmailAddresses -is [array]) {
+    # Already an array, just ensure trimmed and non-empty
+    $RecipientEmailArray = $SendGridRecipientEmailAddresses | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+} else {
+    # Convert to array for consistency
+    $RecipientEmailArray = @($SendGridRecipientEmailAddresses | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+# Ensure RecipientEmailArray is properly initialized as an array
+$RecipientEmailArray = @($RecipientEmailArray)
+Write-Host "Recipients processed: $($RecipientEmailArray.Count) addresses" -ForegroundColor Green
 
 # Disable-Leavers script - Process Workday leavers and disable accounts
 # Resolve system temp directory and ensure it exists
@@ -285,6 +301,9 @@ $rows | Export-Csv -Path $outputpath -NoTypeInformation -ErrorAction Stop
 
 # Build list of files to send (kept in temp directory)
 $filestosend = @($inputpath, $outputpath, $logpath) | Where-Object { $_ -and (Test-Path $_) }
+# Ensure $filestosend is an array
+$filestosend = @($filestosend)
+Write-Host "Files to send: $($filestosend.Count) files" -ForegroundColor Green
 
 # Build report summary
 $matched = $rows | Where-Object { $_.MatchSource }
@@ -367,20 +386,57 @@ function Send-ReportViaSendGrid {
     param(
         [string]$ApiKey,
         [string]$FromEmail,
-        [string[]]$Recipients,
+        $Recipients,
         [string]$Subject,
         [string]$Endpoint,
-        [string[]]$AttachmentPaths
+        $AttachmentPaths
     )
+    Write-Host "SendGrid function called." -ForegroundColor Gray
+
+    # --- Normalize Recipients into an array of PSCustomObject with an 'email' property ---
+    $RecipientArray = @()
+    if ($null -eq $Recipients) {
+        $RecipientArray = @()
+    }
+    elseif ($Recipients -is [string]) {
+        # Accept comma, semicolon or newline separated lists
+        $RecipientArray = ($Recipients -split '[,;\r\n]') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    }
+    elseif ($Recipients -is [System.Collections.IEnumerable]) {
+        $RecipientArray = $Recipients | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }
+    }
+    else {
+        $RecipientArray = @($Recipients.ToString().Trim())
+    }
+
     $toarray = @()
-    foreach ($r in $Recipients) { if (-not [string]::IsNullOrWhiteSpace($r)) { $toarray += @{ email = $r.Trim() } } }
+    foreach ($r in $RecipientArray) {
+        if (-not [string]::IsNullOrWhiteSpace($r)) {
+            $toarray += [PSCustomObject]@{ email = $r }
+        }
+    }
     if ($toarray.Count -eq 0) { throw 'No valid recipient email addresses specified.' }
+
+    # --- Normalize AttachmentPaths into an array of strings ---
+    $AttachmentArray = @()
+    if ($null -ne $AttachmentPaths) {
+        if ($AttachmentPaths -is [string]) { $AttachmentArray = @($AttachmentPaths) }
+        elseif ($AttachmentPaths -is [System.Collections.IEnumerable]) { $AttachmentArray = $AttachmentPaths }
+        else { $AttachmentArray = @($AttachmentPaths.ToString()) }
+    }
+
     $attachments = @()
-    foreach ($p in $AttachmentPaths) {
+    foreach ($p in $AttachmentArray) {
         try {
+            if (-not (Test-Path $p)) { Write-Warning "Attachment path not found: $p"; continue }
             $bytes = [System.IO.File]::ReadAllBytes($p)
             $b64 = [System.Convert]::ToBase64String($bytes)
-            $attachments += @{ content = $b64; filename = (Split-Path -Leaf $p); type = (Get-MimeTypeForFile -Path $p); disposition = 'attachment' }
+            $attachments += [PSCustomObject]@{
+                content     = $b64
+                filename    = (Split-Path -Leaf $p)
+                type        = (Get-MimeTypeForFile -Path $p)
+                disposition = 'attachment'
+            }
         }
         catch {
             Write-Warning "Failed to attach file '$p': $($_.Exception.Message)"
@@ -407,10 +463,13 @@ try {
     # Use the specified Secrets Key Vault directly
     $apikey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
     $fixedsubject = 'disabling leavers report'
-    Send-ReportViaSendGrid -ApiKey $apikey -FromEmail $SendGridSenderEmailAddress -Recipients $SendGridRecipientEmailAddresses -Subject $fixedsubject -Endpoint $SendGridApiEndpoint -AttachmentPaths $filestosend
+    
+    Write-Host "Sending email report with $($RecipientEmailArray.Count) recipients and $($filestosend.Count) attachments" -ForegroundColor Cyan
+    Send-ReportViaSendGrid -ApiKey $apikey -FromEmail $SendGridSenderEmailAddress -Recipients $RecipientEmailArray -Subject $fixedsubject -Endpoint $SendGridApiEndpoint -AttachmentPaths $filestosend
 }
 catch {
-    Write-Warning $_
+    Write-Warning "Email sending failed: $($_.Exception.Message)"
+    Write-Warning "Full error details: $_"
 }
 
 function Initialize-AzureContext {
