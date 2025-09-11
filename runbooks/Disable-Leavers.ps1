@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Disable Microsoft Entra ID and on-premises AD user accounts from a Workday leavers CSV stored in Azure Blob Storage, and produce a report.
+Disable Microsoft Entra and on-premises AD user accounts from a Workday leavers CSV stored in Azure Blob Storage, and produce a report.
 
 .DESCRIPTION
 The script downloads the specified CSV from Azure Storage using Managed Identity authentication, matches users by Employee ID, Primary Email, or Legal Name,
