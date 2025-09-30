@@ -70,11 +70,15 @@ param(
     [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for API credentials (e.g., 'UniPharSecretsKeyVault') - stores SendGrid API key and other external service credentials")][string]$SecretsKeyVaultName,
     [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the SendGrid API key (e.g., 'SendGridApiKey')")][string]$SendGridApiKeySecretName,
     [Parameter(Mandatory = $true, HelpMessage = "Enter the sender email address for SendGrid (e.g., 'noreply@uniphar.ie')")][string]$SendGridSenderEmailAddress,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")][object]$SendGridRecipientEmailAddresses,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")][string[]]$SendGridRecipientEmailAddresses,
     [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")][string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
-    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")][switch]$DisableAccounts
+    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")][object]$DisableAccounts = $false
 )
 
+# If Azure Automation passes a single comma-separated string, convert to string array
+if ($SendGridRecipientEmailAddresses -is [string]) {
+    $SendGridRecipientEmailAddresses = $SendGridRecipientEmailAddresses -split '\s*,\s*'
+}
 # Handle Azure Automation casting: if DisableAccounts is not a switch, convert to boolean
 if ($PSBoundParameters.ContainsKey('DisableAccounts') -and ($DisableAccounts -isnot [System.Management.Automation.SwitchParameter])) {
     if ($DisableAccounts) {
