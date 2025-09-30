@@ -72,9 +72,17 @@ param(
     [Parameter(Mandatory = $true, HelpMessage = "Enter the sender email address for SendGrid (e.g., 'noreply@uniphar.ie')")][string]$SendGridSenderEmailAddress,
     [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")][object]$SendGridRecipientEmailAddresses,
     [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")][string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
-    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")][object]$DisableAccounts = $false
+    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")][switch]$DisableAccounts
 )
 
+# Handle Azure Automation casting: if DisableAccounts is not a switch, convert to boolean
+if ($PSBoundParameters.ContainsKey('DisableAccounts') -and ($DisableAccounts -isnot [System.Management.Automation.SwitchParameter])) {
+    if ($DisableAccounts) {
+        $DisableAccounts = $true
+    } else {
+        $DisableAccounts = $false
+    }
+}
 # Fail fast on non-terminating errors; override per-call if needed
 $ErrorActionPreference = 'Stop'
 
