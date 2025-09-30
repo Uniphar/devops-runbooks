@@ -316,7 +316,7 @@ function Initialize-OnPremAD {
     $dcparams = @{ Server = $Server; ErrorAction = 'Stop' }
     $cred = Get-OnPremAdCredential
     if ($cred) { $dcparams['Credential'] = $cred }
-        Get-ADDomainController @dcparams | Out-Null
+    Get-ADDomainController @dcparams | Out-Null
 
         $script:OnPremADReady = $true
         Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
