@@ -52,7 +52,7 @@ The email subject is fixed: "disabling leavers report".
 pwsh -File .\runbooks\Disable-Leavers.ps1 -StorageAccountName unipharsftp -ContainerName workday -BlobName 'Leavers_Report_-_Active_Directory_-_IT.csv' -OnPremDomainController unidc10.uniphar.local -OnPremAdUsernameSecretName <usernameSecret> -OnPremAdPassSecretName <passwordSecret> -AdKeyVaultName <adKeyVaultName> -SecretsKeyVaultName <secretsKeyVaultName> -SendGridApiKeySecretName <sendGridSecret> -SendGridSenderEmailAddress <senderEmail> -SendGridRecipientEmailAddresses <recipientEmails> -DisableAccounts
 
 .REQUIREMENTS
-- Microsoft Graph PowerShell with User.connReadWrite.All permissions
+- Microsoft Graph PowerShell with User.ReadWrite.All permissions
 - Az.Accounts, Az.Storage, Az.KeyVault modules with Managed Identity access to Storage and Key Vault
 - RSAT ActiveDirectory module and Hybrid Runbook Worker network connectivity to on-premises DCs
 - SendGrid API key for email notifications
