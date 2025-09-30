@@ -600,7 +600,8 @@ if ($DisableAccountsBool) {
             if (-not $upntodisable) { continue }
             try {
                 $cred = Get-OnPremAdCredential
-                $aduserparams = @{ Filter = "UserPrincipalName -eq '$upntodisable'"; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
+                $escapedUpn = $upntodisable -replace "'", "''"
+                $aduserparams = @{ Filter = "UserPrincipalName -eq '$escapedUpn'"; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
                 if ($cred) { $aduserparams['Credential'] = $cred }
                 $aduser = $null
                 $aduser = Get-ADUser @aduserparams
