@@ -464,6 +464,24 @@ Write-Host "About to initialize Graph context..." -ForegroundColor Cyan
 Initialize-GraphContext
 Write-Host "Graph context initialized" -ForegroundColor Cyan
 
+# --- Try to initialize on-prem AD early so report-only runs can also probe AD ---
+$onpremavailable = $false
+try {
+    Write-Host "Attempting early on-prem AD initialization (to allow report-only AD matching)..." -ForegroundColor Cyan
+    if (Initialize-OnPremAD -Server $OnPremDomainController) {
+        $onpremavailable = $true
+        Write-Host 'Early On-prem AD initialization succeeded.' -ForegroundColor Green
+    }
+    else {
+        Write-Host 'Early On-prem AD initialization did not succeed; continuing without on-prem AD.' -ForegroundColor Yellow
+        $onpremavailable = $false
+    }
+}
+catch {
+    Write-Warning "Early On-prem AD initialization failed (non-fatal): $($_.Exception.Message)"
+    $onpremavailable = $false
+}
+
 # Build Azure Storage context using managed identity / connected account
 try {
     $storagecontext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -ErrorAction Stop
@@ -513,10 +531,10 @@ $processed = 0
 $total = $rows.Count
 foreach ($row in $rows) {
     $processed++
-    $employeeid = $row.'Employee ID'
-    $email = $row.'Email - Primary Work'
-    # Current file uses 'Legal Name' for display name source
-    $displayname = $row.'Legal Name'
+    $employeeid = $row.'Employee_ID'
+    $email = $row.'primaryWorkEmail'
+    # Current file uses 'Legal_Name' for display name source
+    $displayname = $row.'Legal_Name'
 
     # Ensure / (re)create output columns (idempotent with -Force)
     Add-Member -InputObject $row -NotePropertyName UPN             -NotePropertyValue $null -Force
@@ -571,12 +589,9 @@ if ($DisableAccountsBool) {
     Write-Host "Disabling matched enabled cloud accounts..." -ForegroundColor Yellow
     $matchedenabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
 
-    # Prepare on-prem AD context early if requested
-    if (-not (Initialize-OnPremAD -Server $OnPremDomainController)) {
-        Write-Warning "On-prem AD initialization failed. Only Entra ID accounts will be disabled."
-        $onpremavailable = $false
-    } else {
-        $onpremavailable = $true
+    # Use early on-prem AD initialization result
+    if (-not $onpremavailable) {
+        Write-Warning "On-prem AD not available (early init failed). Only Entra ID accounts will be disabled."
     }
 
     foreach ($r in $matchedenabled) {
