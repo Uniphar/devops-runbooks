@@ -611,7 +611,7 @@ if ($DisableAccountsBool) {
             if (-not $upntodisable) { continue }
             try {
                 $cred = Get-OnPremAdCredential
-                $escapedUpn = $upntodisable -replace "'", "''"
+                $escapedUpn = Escape-LdapFilterValue $upntodisable
                 $aduserparams = @{ Filter = "UserPrincipalName -eq '$escapedUpn'"; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
                 if ($cred) { $aduserparams['Credential'] = $cred }
                 $aduser = $null
