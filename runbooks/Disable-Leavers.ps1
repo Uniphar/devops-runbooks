@@ -311,7 +311,7 @@ function Initialize-OnPremAD {
         if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
         if ($PSVersionTable.PSEdition -eq 'Core') {
             # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
-            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
+        Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
         }
         else {
             Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
