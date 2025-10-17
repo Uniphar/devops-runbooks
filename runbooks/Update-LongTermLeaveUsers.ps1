@@ -51,14 +51,14 @@ Optional: the SendGrid API endpoint (default: https://api.sendgrid.com/v3/mail/s
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [Parameter(Mandatory = $false)][string]$GroupName,
-    [Parameter(Mandatory = $false)][string]$StorageAccount,
-    [Parameter(Mandatory = $false)][string]$Container,
-    [Parameter(Mandatory = $false)][string]$BlobName,
-    [Parameter(Mandatory = $false)][string]$SendGridApiKeyKvName,
-    [Parameter(Mandatory = $false)][string]$SendGridApiKeyKvSecretName,
-    [Parameter(Mandatory = $false)][string]$SendGridSenderEmailAddress,
-    [Parameter(Mandatory = $false)][string]$SendGridRecipientEmailAddresses,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$GroupName,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$StorageAccount,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Container,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$BlobName,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$SendGridApiKeyKvName,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$SendGridApiKeyKvSecretName,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$SendGridSenderEmailAddress,
+    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$SendGridRecipientEmailAddresses,
     [Parameter(Mandatory = $false)][string]$SendGridApiEndpoint = "https://api.sendgrid.com/v3/mail/send"
 )
 
