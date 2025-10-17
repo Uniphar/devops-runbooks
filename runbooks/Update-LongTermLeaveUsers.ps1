@@ -392,13 +392,7 @@ Write-Output "✓ Connected to Microsoft Graph"
             }
             
             Write-Output "  ✓ Retrieved secret from Key Vault: $($kvSecret.Id)"
-            try {
-                $t = $sendGridApiKey.GetType().FullName
-                $len = if ($sendGridApiKey -ne $null) { $sendGridApiKey.Length } else { 0 }
-                Write-Output "  sendGridApiKey type: $t; length: $len"
-            } catch {
-                Write-Output "  sendGridApiKey diagnostics unavailable: $($_.Exception.Message)"
-            }
+            # (Removed diagnostic output of secret type and length per least disclosure practices)
         }
     } catch {
         Write-Output "  ERROR: Unable to read SendGrid secret from Key Vault: $($_.Exception.Message)"
