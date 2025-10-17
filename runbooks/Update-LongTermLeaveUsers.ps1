@@ -146,26 +146,15 @@ function Send-EmailReport {
 
 # --- Main execution ---
 
-# Validate required parameters
-Write-Output "Validating parameters..."
-$requiredParams = @{
-    'GroupName' = $GroupName
-    'StorageAccount' = $StorageAccount
-    'Container' = $Container
-    'BlobName' = $BlobName
-    'SendGridApiKeyKvName' = $SendGridApiKeyKvName
-    'SendGridApiKeyKvSecretName' = $SendGridApiKeyKvSecretName
-    'SendGridSenderEmailAddress' = $SendGridSenderEmailAddress
-    'SendGridRecipientEmailAddresses' = $SendGridRecipientEmailAddresses
-}
-
-foreach ($paramName in $requiredParams.Keys) {
-    $paramValue = $requiredParams[$paramName]
-    if ([string]::IsNullOrWhiteSpace($paramValue)) {
-        throw "Required parameter '$paramName' is null or empty. Please ensure all parameters are configured in the Azure Automation job."
-    }
-    Write-Output "  ✓ $paramName = $paramValue"
-}
+# Log parameter values for runbook execution tracking
+Write-Output "Running with parameters:"
+Write-Output "  GroupName = $GroupName"
+Write-Output "  StorageAccount = $StorageAccount"
+Write-Output "  Container = $Container"
+Write-Output "  BlobName = $BlobName"
+Write-Output "  SendGridApiKeyKvName = $SendGridApiKeyKvName"
+Write-Output "  SendGridSenderEmailAddress = $SendGridSenderEmailAddress"
+Write-Output "  SendGridRecipientEmailAddresses = $SendGridRecipientEmailAddresses"
 
 # Authentication
 # Use the automation account or system-assigned managed identity to authenticate to Azure and Microsoft Graph.
