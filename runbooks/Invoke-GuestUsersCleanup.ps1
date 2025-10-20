@@ -403,7 +403,15 @@ $attachments = @()
 $filesToAttach = @("$exportDir\AllGuestUsersDebug.csv", "$exportDir\GuestsToDisable.csv", "$exportDir\GuestsToRemove.csv", $logPath)
 foreach ($f in $filesToAttach) {
     if (Test-Path $f) {
-        $attachments += @{ content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); filename = [IO.Path]::GetFileName($f); type = "text/csv"; disposition = "attachment" }
+        $ext = [IO.Path]::GetExtension($f).ToLower()
+        if ($ext -eq ".csv") {
+            $mimeType = "text/csv"
+        } elseif ($ext -eq ".txt") {
+            $mimeType = "text/plain"
+        } else {
+            $mimeType = "application/octet-stream"
+        }
+        $attachments += @{ content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); filename = [IO.Path]::GetFileName($f); type = $mimeType; disposition = "attachment" }
     } else {
         Write-Output "Attachment missing, skipping: $f"
     }
