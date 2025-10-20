@@ -1,531 +1,486 @@
 <#
 .SYNOPSIS
-Disable Microsoft Entra ID and on-premises AD user accounts from a Workday leavers CSV stored in Azure Blob Storage, and produce a report.
+Performs cleanup of inactive guest user accounts in Azure AD based on configurable inactivity thresholds and sends an email report.
 
 .DESCRIPTION
-The script downloads the specified CSV from Azure Storage using Managed Identity authentication, matches users by Employee ID, Primary Email, or Legal Name,
-and optionally disables matched enabled users in both Microsoft Entra ID and on-premises AD (controlled by the -DisableAccounts switch). It writes an 
-augmented CSV and a log file to the local temp directory and sends them via email using SendGrid. The temporary files are not persisted to Azure Storage.
+This script identifies Azure AD guest user accounts that have been inactive for a specified number of days.
+It can optionally disable or remove these users based on the provided parameters RemoveUsers and DisableUsers.
+The script generates CSV reports for all processed users, those to be disabled, those to be removed, and those skipped.
+MS Graph Beta API is used to retrieve user details, including last sign-in activity.
+If a failure occurs when retrieving users from Microsoft Graph Beta, a warning email is sent using SendGrid.
+The script also supports sending email notifications using SendGrid.
 
-.PARAMETER StorageAccountName
-The Azure Storage account name hosting the CSV.
+.PARAMETER InactiveDaysToRemove
+Number of inactive days after which a guest user is considered for removal.
 
-.PARAMETER ContainerName
-The blob container name hosting the CSV.
+.PARAMETER InactiveDaysToDisableMin
+Minimum number of inactive days after which a guest user is considered for disabling.
 
-.PARAMETER BlobName
-The blob name of the CSV to process (e.g. "Leavers_Report_-_Active_Directory_-_IT.csv").
+.PARAMETER RemoveUsers
+Boolean. If $true, users identified for removal will be deleted.
 
-.PARAMETER OnPremDomainController
-FQDN of the on-premises domain controller to target for AD queries and account disable operations.
+.PARAMETER DisableUsers
+Boolean. If $true, users identified for disabling will be disabled.
 
-.PARAMETER OnPremAdUsernameSecretName
-Key Vault secret name that contains the on-prem AD username (e.g., UNIPHAR\\AutomationSvc).
+.PARAMETER KeyVaultName
+The name of the Azure Key Vault instance containing the SendGrid API key.
 
-.PARAMETER OnPremAdPassSecretName
-Key Vault secret name that contains the on-prem AD password corresponding to the username.
+.PARAMETER SendGridSecretName
+The name of the secret in the Key Vault containing the SendGrid API key.
 
-.PARAMETER AdKeyVaultName
-Azure Key Vault name that stores on-premises Active Directory credentials (username and password secrets). This Key Vault must contain the secrets specified by OnPremAdUsernameSecretName and OnPremAdPassSecretName parameters.
+.PARAMETER ToEmail
+The recipient email address for notifications.
 
-.PARAMETER SecretsKeyVaultName
-Azure Key Vault name that stores API keys and external service credentials (SendGrid API key). This Key Vault must contain the secret specified by SendGridApiKeySecretName parameter.
-
-.PARAMETER SendGridApiKeySecretName
-The secret name in Key Vault that contains the SendGrid API key (value should be the raw API key).
-
-.PARAMETER SendGridSenderEmailAddress
-The sender email address for SendGrid.
-
-.PARAMETER SendGridRecipientEmailAddresses
-One or more recipient email addresses for the report.
-
-.PARAMETER SendGridApiEndpoint
-SendGrid API endpoint. Default: https://api.sendgrid.com/v3/mail/send
-
-.PARAMETER DisableAccounts
-Switch parameter that controls whether account disabling is performed. If false (default), no accounts will be disabled in either Entra ID or on-premises AD. If true, matched accounts will be disabled in both Entra ID and on-premises AD. This parameter acts as a master switch for all disabling operations.
-
-The email subject is fixed: "disabling leavers report".
-
-.EXAMPLE
-pwsh -File .\runbooks\Disable-Leavers.ps1 -StorageAccountName unipharsftp -ContainerName workday -BlobName 'Leavers_Report_-_Active_Directory_-_IT.csv' -OnPremDomainController unidc10.uniphar.local -OnPremAdUsernameSecretName <usernameSecret> -OnPremAdPassSecretName <passwordSecret> -AdKeyVaultName <adKeyVaultName> -SecretsKeyVaultName <secretsKeyVaultName> -SendGridApiKeySecretName <sendGridSecret> -SendGridSenderEmailAddress <senderEmail> -SendGridRecipientEmailAddresses <recipientEmails> -DisableAccounts
-
-.REQUIREMENTS
-- Microsoft Graph PowerShell with User.ReadWrite.All permissions
-- Az.Accounts, Az.Storage, Az.KeyVault modules with Managed Identity access to Storage and Key Vault
-- RSAT ActiveDirectory module and Hybrid Runbook Worker network connectivity to on-premises DCs
-- SendGrid API key for email notifications
+.PARAMETER FromEmail
+The sender email address for notifications.
 #>
-
-[CmdletBinding(PositionalBinding = $false)]
-param(
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Azure Storage account name (e.g., 'unipharsftp')")]
-    [string]$StorageAccountName, 
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the blob container name (e.g., 'workday')")]
-    [string]$ContainerName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the CSV blob name (e.g., 'Leavers_Report_-_Active_Directory_-_IT.csv')")]
-    [string]$BlobName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the FQDN of the on-premises domain controller (e.g., 'dc117.uni.local')")]
-    [string]$OnPremDomainController,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the on-prem AD username (e.g., 'OnPremADUser')")]
-    [string]$OnPremAdUsernameSecretName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the on-prem AD password (e.g., 'OnPremADPassword')")]
-    [string]$OnPremAdPassSecretName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for AD credentials (e.g., 'UniPharADKeyVault') - stores on-premises AD username and password secrets")]
-    [string]$AdKeyVaultName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for API credentials (e.g., 'UniPharSecretsKeyVault') - stores SendGrid API key and other external service credentials")]
-    [string]$SecretsKeyVaultName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the SendGrid API key (e.g., 'SendGridApiKey')")]
-    [string]$SendGridApiKeySecretName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the sender email address for SendGrid (e.g., 'noreply@uniphar.ie')")]
-    [string]$SendGridSenderEmailAddress,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")]
-    [string[]]$SendGridRecipientEmailAddresses,
-    [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")]
-    [string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
-    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")]
-    [switch]$DisableAccounts = $false
+[CmdletBinding()]
+param (
+    [int]$InactiveDaysToRemove = 200,
+    [int]$InactiveDaysToDisableMin = 100,
+    [bool]$RemoveUsers = $false,
+    [bool]$DisableUsers = $false,
+    [bool]$TestMode = $true,
+    [Parameter(Mandatory = $true)] [string]$KeyVaultName,
+    [Parameter(Mandatory = $true)] [string]$SendGridSecretName,
+    [Parameter(Mandatory = $true)] [string]$FromEmail,
+    [Parameter(Mandatory = $true)] [string]$ToEmail
 )
 
-# Fail fast on non-terminating errors; override per-call if needed
-$ErrorActionPreference = 'Stop'
-
-# Disable-Leavers script - Process Workday leavers and disable accounts
-# Resolve system temp directory and ensure it exists
-$localtempdir = [System.IO.Path]::GetTempPath()
-if (-not (Test-Path $localtempdir)) { New-Item -ItemType Directory -Path $localtempdir -Force | Out-Null }
-
-# Timestamp once per run so CSVs are unique and not overwritten
-$reportfilenamepattern = "Leavers_Report_-_Active_Directory_-_IT_withUPN"
-$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$outputpath = Join-Path $localtempdir "${reportfilenamepattern}_${timestamp}.csv"
-
-# Initialize Azure and Graph contexts (Managed Identity when available)
-Initialize-AzureContext
-Initialize-GraphContext
-
-# Build Azure Storage context using managed identity / connected account
+# Connect to Azure using Managed Identity (for Azure Automation)
 try {
-    $storagecontext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -ErrorAction Stop
+    Write-Output "Connecting to Azure using Managed Identity..."
+    Connect-AzAccount -Identity -ErrorAction Stop
+    Write-Output "Successfully connected to Azure using Managed Identity"
+} catch {
+    Write-Output "Failed to connect to Azure using Managed Identity: $($_.Exception.Message)"
+    throw
 }
-catch {
-    throw "Failed to create storage context: $($_.Exception.Message)"
-}
-$inputpath = Join-Path $localtempdir (Split-Path -Leaf $BlobName)
-Write-Host "Downloading input from Azure Storage: $StorageAccountName/$ContainerName/$BlobName -> $inputpath" -ForegroundColor Cyan
+
+# Get SendGrid API Key from Azure Key Vault
+Write-Output "========================================"
+Write-Output "KEY VAULT ACCESS DEBUG INFORMATION:"
+Write-Output "========================================"
+Write-Output "Attempting to retrieve secret from Key Vault..."
+Write-Output "Key Vault Name: $KeyVaultName"
+Write-Output "Secret Name: $SendGridSecretName"
+
 try {
-    Get-AzStorageBlobContent -Container $ContainerName -Blob $BlobName -Destination $inputpath -Context $storagecontext -Force -ErrorAction Stop | Out-Null
-}
-catch {
-    throw "Failed to download blob '$BlobName' from container '$ContainerName' in storage account '$StorageAccountName': $($_.Exception.Message)"
-}
-
-# Graph context is already initialized above via Initialize-GraphContext
-
-Write-Host "Loading input CSV: $inputpath" -ForegroundColor Cyan
-$rows = Import-Csv -Path $inputpath -ErrorAction Stop
-if (-not $rows) {
-    Write-Warning "No rows loaded from CSV. Exiting."
-    return
-}
-
-Write-Host "Retrieving users from Entra ID (this may take time in large tenants)..." -ForegroundColor Cyan
-# Single directory pull (avoid N x API calls). Adjust properties as needed.
-$allusers = Invoke-WithRetry -Script {
-    Get-MgUser -All -Property id, employeeId, mail, displayName, userPrincipalName, accountEnabled -ConsistencyLevel eventual -ErrorAction Stop |
-    Select-Object id, userPrincipalName, employeeId, mail, displayName, accountEnabled
-}
-
-# Build fast lookup hash tables (case-insensitive keys)
-$byemployeeid = @{}
-$bymail = @{}
-$bydisplay = @{}
-foreach ($u in $allusers) {
-    if ($u.employeeId -and -not $byemployeeid.ContainsKey($u.employeeId)) { $byemployeeid[$u.employeeId] = $u }
-    if ($u.mail -and -not $bymail.ContainsKey($u.mail.ToLower())) { $bymail[$u.mail.ToLower()] = $u }
-    if ($u.displayName) {
-    $dnkey = $u.displayName.ToLower()
-    if (-not $bydisplay.ContainsKey($dnkey)) { $bydisplay[$dnkey] = $u }
+    # First, try to check if we can access the Key Vault
+    Write-Output "Testing Key Vault access..."
+    $kvTest = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction Stop
+    Write-Output "✓ Key Vault found: $($kvTest.VaultName) (Resource Group: $($kvTest.ResourceGroupName))"
+    
+    # Now try to get the secret
+    Write-Output "Attempting to retrieve secret '$SendGridSecretName'..."
+    $secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SendGridSecretName -AsPlainText -ErrorAction Stop
+    $SendGridApiKey = $secret
+    Write-Output "✓ SendGrid API Key retrieved successfully from Key Vault '$KeyVaultName'"
+    Write-Output "✓ Secret length: $($SendGridApiKey.Length) characters"
+} catch {
+    Write-Output "✗ Failed to retrieve SendGrid API Key from Key Vault '$KeyVaultName'"
+    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Output "Error Message: $($_.Exception.Message)"
+    
+    if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*not authorized*") {
+        Write-Output ""
+        Write-Output "PERMISSION ISSUE DETECTED:"
+        Write-Output "The Managed Identity does not have permission to access Key Vault secrets."
+        Write-Output ""
+        Write-Output "TO FIX THIS:"
+        Write-Output "1. Go to Azure Portal > Key Vault: $KeyVaultName"
+        Write-Output "2. Navigate to 'Access policies' or 'Access control (IAM)'"
+        Write-Output "3. Add the Automation Account's Managed Identity with 'Get' permission for Secrets"
+        Write-Output "   OR assign 'Key Vault Secrets User' role to the Managed Identity"
+    } elseif ($_.Exception.Message -like "*not found*" -or $_.Exception.Message -like "*404*") {
+        Write-Output ""
+        Write-Output "SECRET NOT FOUND:"
+        Write-Output "The secret '$SendGridSecretName' does not exist in Key Vault '$KeyVaultName'"
+        Write-Output "Please verify the secret name is correct."
     }
+    
+    $SendGridApiKey = ""
 }
+Write-Output "========================================"
 
-$processed = 0
-$total = $rows.Count
-foreach ($row in $rows) {
-    $processed++
-    $employeeid = $row.'Employee ID'
-    $email = $row.'Email - Primary Work'
-    # Current file uses 'Legal Name' for display name source
-    $displayname = $row.'Legal Name'
+$scriptStart = Get-Date
 
-    # Ensure / (re)create output columns (idempotent with -Force)
-    Add-Member -InputObject $row -NotePropertyName UPN             -NotePropertyValue $null -Force
-    Add-Member -InputObject $row -NotePropertyName 'UPN-mail'      -NotePropertyValue $null -Force
-    Add-Member -InputObject $row -NotePropertyName DisplayName_UPN -NotePropertyValue $null -Force
-    Add-Member -InputObject $row -NotePropertyName AccountEnabled  -NotePropertyValue $null -Force
-    Add-Member -InputObject $row -NotePropertyName MatchSource     -NotePropertyValue $null -Force
-    Add-Member -InputObject $row -NotePropertyName OnPremDisabledActionResult -NotePropertyValue $null -Force
-
-    $user = $null
-
-    # 1. Match by employeeId (exact)
-    if ($employeeid -and $byemployeeid.ContainsKey($employeeid)) {
-        $user = $byemployeeid[$employeeid]
-        $row.UPN = $user.userPrincipalName
-        $row.AccountEnabled = $user.accountEnabled
-        $row.MatchSource = 'EmployeeId'
-    }
-    # 2. Match by mail (case-insensitive exact)
-    elseif ($email) {
-        $lower = $email.ToLower()
-        if ($bymail.ContainsKey($lower)) {
-            $user = $bymail[$lower]
-            $row.'UPN-mail' = $user.userPrincipalName
-            $row.AccountEnabled = $user.accountEnabled
-            $row.MatchSource = 'Mail'
-        }
-    }
-    # 3. Match by display name (case-insensitive exact)
-    if (-not $user -and $displayname) {
-        $dnkey = $displayname.ToLower()
-        if ($bydisplay.ContainsKey($dnkey)) {
-            $user = $bydisplay[$dnkey]
-            $row.DisplayName_UPN = $user.userPrincipalName
-            $row.AccountEnabled = $user.accountEnabled
-            $row.MatchSource = 'DisplayName'
-        }
-    }
-
-    if (-not $user) {
-        # Leave columns null; could optionally log
-        # Write-Verbose "No match for row $processed/$total (EmployeeId=$employeeId, Email=$email, DisplayName=$displayName)"
-    }
-
-    if (($processed % 200) -eq 0) { Write-Host "Processed $processed / $total" -ForegroundColor DarkGray }
+# Connect to Microsoft Graph using Managed Identity (for Azure Automation)
+try {
+    Write-Output "Connecting to Microsoft Graph using Managed Identity..."
+    Connect-MgGraph -Identity -ErrorAction Stop
+    Write-Output "Successfully connected to Microsoft Graph using Managed Identity"
+} catch {
+    Write-Output "Failed to connect to Microsoft Graph using Managed Identity: $($_.Exception.Message)"
+    throw
 }
 
-# After matching loop, disable matched enabled accounts if DisableAccounts switch is enabled
-$rows | Add-Member -NotePropertyName DisabledActionResult -NotePropertyValue $null -Force
+$InactiveDaysToDisableMax = $InactiveDaysToRemove
 
-if ($DisableAccounts) {
-    Write-Host "Disabling matched enabled cloud accounts..." -ForegroundColor Yellow
-    $matchedenabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
+# Get all guest users
+Write-Output "========================================"
+Write-Output "RETRIEVING GUEST USERS FROM MICROSOFT GRAPH:"
+Write-Output "========================================"
+Write-Output "Attempting to query guest users with SignInActivity..."
+Write-Output "Filter: userType eq 'Guest'"
+Write-Output "Properties: Id, UserPrincipalName, CreatedDateTime, LastPasswordChangeDateTime, SignInActivity"
+Write-Output ""
 
-    # Prepare on-prem AD context early if requested
-    if (-not (Initialize-OnPremAD -Server $OnPremDomainController)) {
-        Write-Warning "On-prem AD initialization failed. Only Entra ID accounts will be disabled."
-        $onpremavailable = $false
-    } else {
-        $onpremavailable = $true
+try {
+    $guests = Get-MgBetaUser -Filter "userType eq 'Guest'" `
+        -Property "Id,UserPrincipalName,CreatedDateTime,LastPasswordChangeDateTime,SignInActivity" `
+        -All -ErrorAction Stop
+    
+    Write-Output "✓ Successfully retrieved $($guests.Count) guest users."
+    
+    Write-Output "========================================"
+} catch {
+    $errorMsg = "ERROR: Failed to retrieve users from Microsoft Graph Beta API. Exception: $($_.Exception.Message)"
+    Write-Output $errorMsg
+    Write-Output ""
+    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Output "Error Category: $($_.CategoryInfo.Category)"
+    Write-Output ""
+    
+    # Specific troubleshooting based on error
+    if ($_.Exception.Message -like "*AuditLog.Read.All*") {
+        Write-Output "ISSUE IDENTIFIED: AuditLog.Read.All permission error"
+        Write-Output ""
+        Write-Output "The error indicates that the Managed Identity for the Automation Account is missing the 'AuditLog.Read.All' MS Graph API permission."
+        Write-Output "A Global Admin must grant this permission in Azure AD / Enterprise Applications."
+        Write-Output ""
     }
+    
+    Write-Output "========================================"
 
-    foreach ($r in $matchedenabled) {
-        $upntodisable = $r.UPN
-        if (-not $upntodisable) { $upntodisable = $r.'UPN-mail' }
-        if (-not $upntodisable) { $upntodisable = $r.DisplayName_UPN }
-        if (-not $upntodisable) { continue }
-        try {
-            Invoke-WithRetry -Script { Update-MgUser -UserId $upntodisable -AccountEnabled:$false -ErrorAction Stop } | Out-Null
-            $r.DisabledActionResult = 'Disabled'
-        }
-        catch {
-            $r.DisabledActionResult = "Error: $($_.Exception.Message)"
-        }
-    }
-
-    # On-prem disable ALL matched accounts (even those already disabled in Entra)
-    if ($onpremavailable) {
-        Write-Host "Disabling matched accounts on-prem (all matched, regardless of cloud state)..." -ForegroundColor Yellow
-        $matchedall = $rows | Where-Object { $_.MatchSource }
-        foreach ($r in $matchedall) {
-            $upntodisable = $r.UPN
-            if (-not $upntodisable) { $upntodisable = $r.'UPN-mail' }
-            if (-not $upntodisable) { $upntodisable = $r.DisplayName_UPN }
-            if (-not $upntodisable) { continue }
-            try {
-                $aduserparams = @{ Identity = $upntodisable; Server = $OnPremDomainController; Properties = 'Enabled'; ErrorAction = 'Stop' }
-                $cred = Get-OnPremAdCredential
-                if ($cred) { $aduserparams['Credential'] = $cred }
-                $aduser = $null
-                $aduser = Get-ADUser @aduserparams
-                if ($aduser.Enabled) {
-                    $disparams = @{ Identity = $aduser.DistinguishedName; Server = $OnPremDomainController; ErrorAction = 'Stop' }
-                    if ($cred) { $disparams['Credential'] = $cred }
-                    Disable-ADAccount @disparams
-                    $r.OnPremDisabledActionResult = 'Disabled'
-                }
-                else {
-                    # Attempting to disable again but it's already disabled
-                    if (-not $r.OnPremDisabledActionResult) { $r.OnPremDisabledActionResult = 'AlreadyDisabled' }
-                }
-            }
-            catch {
-                $r.OnPremDisabledActionResult = "Error: $($_.Exception.Message)"
-            }
-        }
-    }
-}
-else {
-    Write-Host "DisableAccounts is false - no accounts will be disabled" -ForegroundColor Yellow
-}
-
-# Reporting setup (reuse same $timestamp as output file)
-$logpath = (Join-Path $localtempdir "Disable-Leavers_Report_$timestamp.log")
-# Ensure output and log directories exist
-$__pathstoensure = @((Split-Path -Parent $outputpath), (Split-Path -Parent $logpath))
-foreach ($__d in $__pathstoensure) { if ($__d -and -not (Test-Path $__d)) { New-Item -ItemType Directory -Path $__d -Force | Out-Null } }
-"Disable-Leavers run started: $(Get-Date)" | Out-File -FilePath $logpath -Encoding UTF8
-"Input CSV: $inputpath" | Out-File -FilePath $logpath -Append
-"Output CSV (will be written): $outputpath" | Out-File -FilePath $logpath -Append
-"DisableAccounts parameter: $DisableAccounts" | Out-File -FilePath $logpath -Append
-
-Write-Host "Writing output CSV: $outputpath" -ForegroundColor Cyan
-$rows | Export-Csv -Path $outputpath -NoTypeInformation -ErrorAction Stop
-
-# Build list of files to send (kept in temp directory)
-$filestosend = @($inputpath, $outputpath, $logpath) | Where-Object { $_ -and (Test-Path $_) }
-
-# Build report summary
-$matched = $rows | Where-Object { $_.MatchSource }
-$matchedcount = $matched.Count
-$unknowncount = $rows.Count - $matchedcount
-$bysource = $matched | Group-Object MatchSource | Select-Object Name, Count
-$disabledsuccess = @($rows | Where-Object { $_.DisabledActionResult -eq 'Disabled' })
-$disablederrors = @($rows | Where-Object { $_.DisabledActionResult -like 'Error:*' })
-$onpremdisabled = @($rows | Where-Object { $_.OnPremDisabledActionResult -eq 'Disabled' })
-$onpremdisableerr = @($rows | Where-Object { $_.OnPremDisabledActionResult -like 'Error:*' })
-$disabledcount = $disabledsuccess.Count
-$disableerrorcount = $disablederrors.Count
-
-"" | Out-File -FilePath $logpath -Append
-"Summary:" | Out-File -FilePath $logpath -Append
-"Total rows:        $($rows.Count)" | Out-File -FilePath $logpath -Append
-"Matched rows:      $matchedcount" | Out-File -FilePath $logpath -Append
-foreach ($g in $bysource) { "  Matched by $($g.Name): $($g.Count)" | Out-File -FilePath $logpath -Append }
-"Unknown rows:      $unknowncount" | Out-File -FilePath $logpath -Append
-if ($DisableAccounts) {
-    "Accounts disabled: $disabledcount" | Out-File -FilePath $logpath -Append
-    "On-prem accounts disabled: $($onpremdisabled.Count)" | Out-File -FilePath $logpath -Append
-    if ($disableerrorcount -gt 0) { "Disable errors:   $disableerrorcount" | Out-File -FilePath $logpath -Append }
-    if ($onpremdisableerr.Count -gt 0) { "On-prem disable errors: $($onpremdisableerr.Count)" | Out-File -FilePath $logpath -Append }
-}
-else {
-    "DisableAccounts is false - no accounts were disabled" | Out-File -FilePath $logpath -Append
-}
-
-if ($DisableAccounts -and $disableerrorcount -gt 0) {
-    "" | Out-File -FilePath $logpath -Append
-    "Disable error details:" | Out-File -FilePath $logpath -Append
-    foreach ($e in $disablederrors) {
-    $u = $e.UPN
-    if (-not $u) { $u = $e.'UPN-mail' }
-    if (-not $u) { $u = $e.DisplayName_UPN }
-    "  Cloud: $u => $($e.DisabledActionResult)" | Out-File -FilePath $logpath -Append
-    }
-}
-if ($DisableAccounts -and $onpremdisableerr.Count -gt 0) {
-    "" | Out-File -FilePath $logpath -Append
-    "On-prem disable error details:" | Out-File -FilePath $logpath -Append
-    foreach ($e in $onpremdisableerr) {
-    $u = $e.UPN
-    if (-not $u) { $u = $e.'UPN-mail' }
-    if (-not $u) { $u = $e.DisplayName_UPN }
-    "  OnPrem: $u => $($e.OnPremDisabledActionResult)" | Out-File -FilePath $logpath -Append
-    }
-}
-
-"Run completed: $(Get-Date)" | Out-File -FilePath $logpath -Append
-Write-Host "Report log written: $logpath" -ForegroundColor Green
-
-
-#all the functions:
-
-# Fetch SendGrid API key from Key Vault and send email with attachments
-function Get-SecretFromKeyVault {
-    param([string]$VaultName, [string]$SecretName)
-    try {
-        return (Get-AzKeyVaultSecret -VaultName $VaultName -Name $SecretName -AsPlainText -ErrorAction Stop)
-    }
-    catch {
-        throw "Unable to retrieve secret '$SecretName' from Key Vault '$VaultName': $($_.Exception.Message)"
-    }
-}
-
-function Get-MimeTypeForFile {
-    param([string]$Path)
-    $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
-    switch ($ext) {
-        '.csv' { 'text/csv'; break }
-        '.log' { 'text/plain'; break }
-        '.txt' { 'text/plain'; break }
-        default { 'application/octet-stream' }
-    }
-}
-
-function Send-ReportViaSendGrid {
-    param(
-        [string]$ApiKey,
-        [string]$FromEmail,
-        [string[]]$Recipients,
-        [string]$Subject,
-        [string]$Endpoint,
-        [string[]]$AttachmentPaths
-    )
-    $toarray = @()
-    foreach ($r in $Recipients) { if (-not [string]::IsNullOrWhiteSpace($r)) { $toarray += @{ email = $r.Trim() } } }
-    if ($toarray.Count -eq 0) { throw 'No valid recipient email addresses specified.' }
-    $attachments = @()
-    foreach ($p in $AttachmentPaths) {
-        try {
-            $bytes = [System.IO.File]::ReadAllBytes($p)
-            $b64 = [System.Convert]::ToBase64String($bytes)
-            $attachments += @{ content = $b64; filename = (Split-Path -Leaf $p); type = (Get-MimeTypeForFile -Path $p); disposition = 'attachment' }
-        }
-        catch {
-            Write-Warning "Failed to attach file '$p': $($_.Exception.Message)"
-        }
-    }
-    $bodyobj = @{ 
-        personalizations = @(@{ to = $toarray; subject = $Subject })
+    # Prepare SendGrid email payload
+    $emailBody = @{
+        personalizations = @(@{ to = @(@{ email = $ToEmail }) })
         from             = @{ email = $FromEmail }
-        content          = @(@{ type = 'text/plain'; value = "Leavers disable run completed at $(Get-Date). See attached output CSV and log." })
-        attachments      = $attachments
-    }
-    $headers = @{ Authorization = "Bearer $ApiKey" }
-    $json = $bodyobj | ConvertTo-Json -Depth 10
-    try {
-        Invoke-RestMethod -Method Post -Uri $Endpoint -Headers $headers -Body $json -ContentType 'application/json' -ErrorAction Stop | Out-Null
-        Write-Host 'SendGrid report email sent.' -ForegroundColor Green
-    }
-    catch {
-        Write-Warning "Failed to send SendGrid email: $($_.Exception.Message)"
-    }
-}
+        subject          = "Inactive Guest Accounts Cleanup - MS Graph Beta Request Failed"
+        content          = @(@{ type = "text/plain"; value = $errorMsg })
+    } | ConvertTo-Json -Depth 4
 
-try {
-    # Use the specified Secrets Key Vault directly
-    $apikey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
-    $fixedsubject = 'disabling leavers report'
-    Send-ReportViaSendGrid -ApiKey $apikey -FromEmail $SendGridSenderEmailAddress -Recipients $SendGridRecipientEmailAddresses -Subject $fixedsubject -Endpoint $SendGridApiEndpoint -AttachmentPaths $filestosend
-}
-catch {
-    Write-Warning $_
-}
-
-function Initialize-AzureContext {
-    try {
-        Import-Module Az.Accounts -ErrorAction Stop
-        Import-Module Az.Storage -ErrorAction Stop
-        Import-Module Az.KeyVault -ErrorAction Stop
-    }
-    catch {
-        throw 'Required modules Az.Accounts and Az.Storage are not installed in this environment.'
-    }
-    $ctx = $null
-    try { $ctx = Get-AzContext -ErrorAction Stop } catch { $ctx = $null }
-    if (-not $ctx) {
+    if ($SendGridApiKey) {
         try {
-            # Prefer Managed Identity (Azure Automation / managed hosts)
-            Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
+            Invoke-RestMethod -Uri "https://api.sendgrid.com/v3/mail/send" `
+                -Method Post `
+                -Headers @{ "Authorization" = "Bearer $SendGridApiKey"; "Content-Type" = "application/json" } `
+                -Body $emailBody
+            Write-Output "Warning email sent to $ToEmail."
+        } catch {
+            Write-Output "Failed to send warning email via SendGrid: $($_.Exception.Message)"
         }
-        catch {
-            # Fallback to interactive (useful for local runs)
-            Connect-AzAccount -ErrorAction Stop | Out-Null
-        }
+    } else {
+        Write-Output "SendGrid API Key not available. Cannot send warning email."
     }
+
+    # Stop the script
+    throw "Stopping script due to MS Graph Beta request failure."
 }
 
-function Initialize-GraphContext {
-    try {
-        Import-Module Microsoft.Graph.Users -ErrorAction Stop
-    }
-    catch {
-        throw 'Required module Microsoft.Graph.Users is not installed in this environment.'
-    }
-    try {
-        Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop | Out-Null
-    }
-    catch {
-        throw "Failed to connect to Microsoft Graph with Managed Identity. Ensure the RunAs account has required permissions (User.ReadWrite.All) and is enabled. Error: $($_.Exception.Message)"
-    }
-}
-# Centralized AD initialization
-function Initialize-OnPremAD {
-    param(
-        [string]$Server
-    )
-    if (-not $Server) { $Server = $OnPremDomainController }
-    if ($script:OnPremADReady) { return $true }
-    try {
-        if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
-        if ($PSVersionTable.PSEdition -eq 'Core') {
-            # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
-            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
+$now = Get-Date
+$toRemove = @()
+$toDisable = @()
+$skippedUsers = @()
+$report = @()
+$actionLog = @()
+
+# Process each guest user
+foreach ($guest in $guests) {
+    $lastSignIn = $null
+    $reportLastSignIn = ""
+    $inactiveDays = $null
+
+    # Use SignInActivity from Microsoft Graph Beta
+    if ($guest.SignInActivity -and $guest.SignInActivity.LastSignInDateTime) {
+        $lastSignIn = $guest.SignInActivity.LastSignInDateTime
+        $reportLastSignIn = $lastSignIn
+        Write-Output "[$($guest.UserPrincipalName)] LastSignInDateTime from Graph: $lastSignIn"
+    } elseif ($guest.CreatedDateTime) {
+        $lastSignIn = $guest.CreatedDateTime
+        $reportLastSignIn = "no sign in ever"
+        Write-Output "[$($guest.UserPrincipalName)] Using CreatedDateTime for inactivity calculation: $lastSignIn"
+    } elseif ($guest.LastPasswordChangeDateTime) {
+        $lastSignIn = $guest.LastPasswordChangeDateTime
+        $reportLastSignIn = "no sign in ever"
+        Write-Output "[$($guest.UserPrincipalName)] Using LastPasswordChangeDateTime for inactivity calculation: $lastSignIn"
+    } else {
+        Write-Output "[$($guest.UserPrincipalName)] No usable date found for inactivity calculation. Skipping user."
+        $skippedUsers += [PSCustomObject]@{
+            UserPrincipalName = $guest.UserPrincipalName
+            Id                = $guest.Id
+            Reason            = "No sign-in activity, creation date, or password change date"
         }
-        else {
-            Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
-        }
-    # Retrieve credentials (lazy) and validate connection
-    $dcparams = @{ Server = $Server; ErrorAction = 'Stop' }
-    $cred = Get-OnPremAdCredential
-    if ($cred) { $dcparams['Credential'] = $cred }
-        Get-ADDomainController @dcparams | Out-Null
+        continue
+    }
 
-        $script:OnPremADReady = $true
-        Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
-        return $true
+    # Ensure $lastSignIn is a DateTime object
+    if ($lastSignIn -is [System.DateTimeOffset]) {
+        $lastSignInValue = $lastSignIn.DateTime
+    } else {
+        $lastSignInValue = $lastSignIn
     }
-    catch {
-        Write-Warning "On-prem AD not available: $($_.Exception.Message)"
-        $script:OnPremADReady = $false
-        return $false
-    }
-}
 
-# Lazily retrieve and cache on-prem AD credentials (script scope)
-function Get-OnPremAdCredential {
-    if ($script:AdCredential) { return $script:AdCredential }
-    try {
-    $aduser = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdUsernameSecretName -AsPlainText -ErrorAction Stop
-    $adpassplain = Get-AzKeyVaultSecret -VaultName $AdKeyVaultName -Name $OnPremAdPassSecretName -AsPlainText -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace($aduser) -or [string]::IsNullOrWhiteSpace($adpassplain)) { throw 'Empty AD username or password from Key Vault' }
-    $adpass = ConvertTo-SecureString $adpassplain -AsPlainText -Force
-    $script:AdCredential = New-Object System.Management.Automation.PSCredential ($aduser, $adpass)
-        return $script:AdCredential
-    }
-    catch {
-        throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message)."
-    }
-}
-
-# Simple retry helper with exponential backoff and optional Retry-After header support
-function Invoke-WithRetry {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][ScriptBlock]$Script,
-        [int]$MaxAttempts = 5,
-        [int]$BaseDelaySeconds = 1
-    )
-    $attempt = 0
-    while ($true) {
-        $attempt++
+    if (-not ($lastSignInValue -is [DateTime])) {
         try {
-            return & $Script
+            $lastSignInValue = [datetime]$lastSignInValue
+            Write-Output "[$($guest.UserPrincipalName)] Final used date for inactivity calculation: $lastSignInValue"
+        } catch {
+            Write-Output "[$($guest.UserPrincipalName)] Could not convert date for inactivity calculation. Skipping user."
+            continue
         }
-        catch {
-            if ($attempt -ge $MaxAttempts) { throw }
-            $ex = $_.Exception
-            # Default exponential backoff
-            $delay = [math]::Min(60, [int]([math]::Pow(2, $attempt - 1) * $BaseDelaySeconds))
-            # If error contains Retry-After, honor it when larger
-            $retryAfter = $null
-            if ($ex.Response -and $ex.Response.Headers -and $ex.Response.Headers['Retry-After']) {
-                [int]::TryParse($ex.Response.Headers['Retry-After'], [ref]$retryAfter) | Out-Null
-                if ($retryAfter -and $retryAfter -gt $delay) { $delay = $retryAfter }
+    } else {
+        Write-Output "[$($guest.UserPrincipalName)] Final used date for inactivity calculation: $lastSignInValue"
+    }
+
+    $inactiveDays = ($now - $lastSignInValue).Days
+
+    # Build a report object for this guest
+    $report += [PSCustomObject]@{
+        UserPrincipalName = $guest.UserPrincipalName
+        Id                = $guest.Id
+        LastSignInDate    = $reportLastSignIn
+        CreationDate      = $guest.CreatedDateTime
+        InactiveDays      = $inactiveDays
+    }
+
+    # Classify users based on inactivity days.
+    if ($inactiveDays -gt $InactiveDaysToRemove) {
+        $toRemove += $guest
+    } elseif (($inactiveDays -ge $InactiveDaysToDisableMin) -and ($inactiveDays -le $InactiveDaysToDisableMax)) {
+        $toDisable += $guest
+    }
+}
+
+# Display summary statistics
+Write-Output "========================================"
+Write-Output "GUEST USER ANALYSIS SUMMARY:"
+Write-Output "========================================"
+Write-Output "Total guest users found: $($guests.Count)"
+Write-Output "Users to be disabled (inactive $InactiveDaysToDisableMin-$InactiveDaysToDisableMax days): $($toDisable.Count)"
+Write-Output "Users to be removed (inactive >$InactiveDaysToRemove days): $($toRemove.Count)"
+Write-Output "Skipped users: $($skippedUsers.Count)"
+Write-Output ""
+Write-Output "Inactivity breakdown:"
+$inactivityGroups = $report | Group-Object { 
+    if ($_.InactiveDays -le 30) { "0-30 days" }
+    elseif ($_.InactiveDays -le 60) { "31-60 days" }
+    elseif ($_.InactiveDays -le 90) { "61-90 days" }
+    elseif ($_.InactiveDays -le 120) { "91-120 days" }
+    elseif ($_.InactiveDays -le 180) { "121-180 days" }
+    elseif ($_.InactiveDays -le 365) { "181-365 days" }
+    else { "365+ days" }
+}
+foreach ($group in ($inactivityGroups | Sort-Object Name)) {
+    Write-Output "  $($group.Name): $($group.Count) users"
+}
+Write-Output "========================================"
+
+# Set export directory to temp path suitable for Azure Automation
+$exportDir = $env:TEMP
+if (-not (Test-Path $exportDir)) {
+    New-Item -Path $exportDir -ItemType Directory | Out-Null
+}
+Write-Output "Export directory: $exportDir"
+
+# Export all guest user objects with only available details for debugging
+$guests | Select-Object UserPrincipalName, CreatedDateTime, LastPasswordChangeDateTime |
+    ForEach-Object {
+        $g = $_
+        $reportEntry = $report | Where-Object { $_.UserPrincipalName -eq $g.UserPrincipalName }
+        [PSCustomObject]@{
+            UserPrincipalName          = $g.UserPrincipalName
+            CreatedDateTime            = $g.CreatedDateTime
+            LastPasswordChangeDateTime = $g.LastPasswordChangeDateTime
+            LastSignInDate             = if ($reportEntry) { $reportEntry.LastSignInDate } else { $null }
+            InactiveDays               = if ($reportEntry) { $reportEntry.InactiveDays } else { $null }
+        }
+    } | Export-Csv -Path "$exportDir\AllGuestUsersDebug.csv" -NoTypeInformation
+Write-Output "All guest user details exported for debugging: $exportDir\AllGuestUsersDebug.csv"
+
+# Export users to be disabled
+$toDisable | ForEach-Object {
+    $guest = $_
+    $reportEntry = $report | Where-Object { $_.UserPrincipalName -eq $guest.UserPrincipalName }
+    [PSCustomObject]@{
+        UserPrincipalName          = $guest.UserPrincipalName
+        CreatedDateTime            = $guest.CreatedDateTime
+        LastPasswordChangeDateTime = $guest.LastPasswordChangeDateTime
+        LastSignInDate             = if ($reportEntry) { $reportEntry.LastSignInDate } else { $null }
+        InactiveDays               = if ($reportEntry) { $reportEntry.InactiveDays } else { $null }
+    }
+} | Export-Csv -Path "$exportDir\GuestsToDisable.csv" -NoTypeInformation
+Write-Output "Users to be disabled exported: $exportDir\GuestsToDisable.csv"
+
+# Export users to be removed
+$toRemove | ForEach-Object {
+    $guest = $_
+    $reportEntry = $report | Where-Object { $_.UserPrincipalName -eq $guest.UserPrincipalName }
+    [PSCustomObject]@{
+        UserPrincipalName          = $guest.UserPrincipalName
+        CreatedDateTime            = $guest.CreatedDateTime
+        LastPasswordChangeDateTime = $guest.LastPasswordChangeDateTime
+        LastSignInDate             = if ($reportEntry) { $reportEntry.LastSignInDate } else { $null }
+        InactiveDays               = if ($reportEntry) { $reportEntry.InactiveDays } else { $null }
+    }
+} | Export-Csv -Path "$exportDir\GuestsToRemove.csv" -NoTypeInformation
+Write-Output "Users to be removed exported: $exportDir\GuestsToRemove.csv"
+
+# Perform disable and remove actions only if parameters are true
+if ($DisableUsers -and $toDisable.Count -gt 0) {
+    foreach ($user in $toDisable) {
+        if ($TestMode) {
+            Write-Output "[TESTMODE] Would disable user: $($user.UserPrincipalName)"
+            $actionLog += "[TESTMODE] Would disable user: $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o)"
+        } else {
+            Write-Output "Disabling user: $($user.UserPrincipalName)"
+            try {
+                Update-MgBetaUser -UserId $user.Id -AccountEnabled:$false
+                $actionLog += "Disabled user: $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o)"
+            } catch {
+                $actionLog += "Failed to disable user: $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o) - Error: $($_.Exception.Message)"
             }
-            Write-Warning "Attempt $attempt failed: $($ex.Message). Retrying in ${delay}s..."
-            Start-Sleep -Seconds $delay
         }
     }
+} else {
+    foreach ($user in $toDisable) {
+        $actionLog += "User NOT disabled (DisableUsers is false): $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o)"
+    }
+    if ($toDisable.Count -eq 0) {
+        $actionLog += "No users to disable at $(Get-Date -Format o)"
+    }
+    Write-Output "User disabling is skipped (DisableUsers is false or no users to disable)."
 }
+
+if ($RemoveUsers -and $toRemove.Count -gt 0) {
+    foreach ($user in $toRemove) {
+        if ($TestMode) {
+            Write-Output "[TESTMODE] Would remove user: $($user.UserPrincipalName)"
+            $actionLog += "[TESTMODE] Would remove user: $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o)"
+        } else {
+            Write-Output "Removing user: $($user.UserPrincipalName)"
+            try {
+                Remove-MgBetaUser -UserId $user.Id -Confirm:$false
+                $actionLog += "Removed user: $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o)"
+            } catch {
+                $actionLog += "Failed to remove user: $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o) - Error: $($_.Exception.Message)"
+            }
+        }
+    }
+} else {
+    foreach ($user in $toRemove) {
+        $actionLog += "User NOT removed (RemoveUsers is false): $($user.UserPrincipalName) (Id: $($user.Id)) at $(Get-Date -Format o)"
+    }
+    if ($toRemove.Count -eq 0) {
+        $actionLog += "No users to remove at $(Get-Date -Format o)"
+    }
+    Write-Output "User removal is skipped (RemoveUsers is false or no users to remove)."
+}
+
+# Write action log to file
+$logPath = "$exportDir\ActionLog.txt"
+$actionLog | Out-File -FilePath $logPath -Encoding utf8
+
+# Export skipped users if any
+if ($skippedUsers.Count -gt 0) {
+    $skippedUsers | Export-Csv -Path "$exportDir\SkippedGuests.csv" -NoTypeInformation
+    Write-Output "Skipped users report exported: $exportDir\SkippedGuests.csv"
+}
+
+$scriptEnd = Get-Date
+$duration = $scriptEnd - $scriptStart
+Write-Output "Script runtime: $($duration.TotalSeconds) seconds"
+
+# Send all reports and log as attachments in one email via SendGrid
+# Build attachments list defensively (only include files that exist)
+$attachments = @()
+$filesToAttach = @("$exportDir\AllGuestUsersDebug.csv", "$exportDir\GuestsToDisable.csv", "$exportDir\GuestsToRemove.csv", $logPath)
+foreach ($f in $filesToAttach) {
+    if (Test-Path $f) {
+        $ext = [IO.Path]::GetExtension($f).ToLower()
+        $mimeType = if ($ext -eq ".csv") {
+            "text/csv"
+        } elseif ($ext -eq ".txt") {
+            "text/plain"
+        } else {
+            "application/octet-stream"
+        }
+        $attachments += @{ content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); filename = [IO.Path]::GetFileName($f); type = $mimeType; disposition = "attachment" }
+    } else {
+        Write-Output "Attachment missing, skipping: $f"
+    }
+}
+
+$emailSubject = if ($TestMode) {
+    "Inactive Guest Accounts Cleanup - Report [TEST MODE]"
+} else {
+    "Inactive Guest Accounts Cleanup - Report"
+}
+
+$emailContent = if ($TestMode) {
+    "TEST MODE: No users were actually disabled or removed. See attached reports showing what WOULD happen in production mode."
+} else {
+    "See attached reports and action log."
+}
+
+# Debug: Email configuration
+Write-Output "========================================"
+Write-Output "EMAIL SENDING DEBUG INFORMATION:"
+Write-Output "========================================"
+Write-Output "SendGrid API Key present: $(if ($SendGridApiKey) { 'YES (length: ' + $SendGridApiKey.Length + ')' } else { 'NO' })"
+Write-Output "From Email: $FromEmail"
+Write-Output "To Email: $ToEmail"
+Write-Output "Subject: $emailSubject"
+Write-Output "Number of attachments: $($attachments.Count)"
+Write-Output "Attachment files:"
+foreach ($att in $attachments) {
+    Write-Output "  - $($att.filename) (size: $($att.content.Length) base64 chars)"
+}
+Write-Output "Test Mode: $TestMode"
+Write-Output "========================================"
+
+$emailBody = @{
+    personalizations = @(@{ to = @(@{ email = $ToEmail }) })
+    from             = @{ email = $FromEmail }
+    subject          = $emailSubject
+    content          = @(@{ type = "text/plain"; value = $emailContent })
+    attachments      = $attachments
+} | ConvertTo-Json -Depth 6
+
+# Debug: Show email body size
+Write-Output "Email body JSON size: $($emailBody.Length) characters"
+
+# Send email in both test mode and production mode
+if ($SendGridApiKey) {
+    Write-Output "Attempting to send email via SendGrid..."
+    try {
+        $response = Invoke-RestMethod -Uri "https://api.sendgrid.com/v3/mail/send" `
+            -Method Post `
+            -Headers @{ "Authorization" = "Bearer $SendGridApiKey"; "Content-Type" = "application/json" } `
+            -Body $emailBody
+        
+        Write-Output "SendGrid API Response: $($response | ConvertTo-Json -Compress)"
+        
+        if ($TestMode) {
+            Write-Output "[TESTMODE] ✓ Summary email with reports and action log sent successfully to $ToEmail."
+        } else {
+            Write-Output "✓ Summary email with reports and action log sent successfully to $ToEmail."
+        }
+    } catch {
+        Write-Output "✗ Failed to send summary email via SendGrid"
+        Write-Output "Error Message: $($_.Exception.Message)"
+        Write-Output "Error Details: $($_.Exception.Response.StatusCode) - $($_.Exception.Response.StatusDescription)"
+        if ($_.Exception.Response) {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $reader.BaseStream.Position = 0
+            $reader.DiscardBufferedData()
+            $responseBody = $reader.ReadToEnd()
+            Write-Output "SendGrid Response Body: $responseBody"
+        }
+    }
+} else {
+    Write-Output "✗ SendGrid API Key not available. Cannot send summary email."
+    Write-Output "Please check KeyVault configuration: KeyVaultName='$KeyVaultName', SecretName='$SendGridSecretName'"
+}
+Write-Output "========================================"
