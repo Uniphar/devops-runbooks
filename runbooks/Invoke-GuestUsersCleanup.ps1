@@ -57,56 +57,51 @@ try {
     throw
 }
 
-# Get SendGrid API Key from Azure Key Vault if KeyVaultName is provided
-if ($KeyVaultName -and $SendGridSecretName) {
-    Write-Output "========================================"
-    Write-Output "KEY VAULT ACCESS DEBUG INFORMATION:"
-    Write-Output "========================================"
-    Write-Output "Attempting to retrieve secret from Key Vault..."
-    Write-Output "Key Vault Name: $KeyVaultName"
-    Write-Output "Secret Name: $SendGridSecretName"
+# Get SendGrid API Key from Azure Key Vault
+Write-Output "========================================"
+Write-Output "KEY VAULT ACCESS DEBUG INFORMATION:"
+Write-Output "========================================"
+Write-Output "Attempting to retrieve secret from Key Vault..."
+Write-Output "Key Vault Name: $KeyVaultName"
+Write-Output "Secret Name: $SendGridSecretName"
+
+try {
+    # First, try to check if we can access the Key Vault
+    Write-Output "Testing Key Vault access..."
+    $kvTest = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction Stop
+    Write-Output "✓ Key Vault found: $($kvTest.VaultName) (Resource Group: $($kvTest.ResourceGroupName))"
     
-    try {
-        # First, try to check if we can access the Key Vault
-        Write-Output "Testing Key Vault access..."
-        $kvTest = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction Stop
-        Write-Output "✓ Key Vault found: $($kvTest.VaultName) (Resource Group: $($kvTest.ResourceGroupName))"
-        
-        # Now try to get the secret
-        Write-Output "Attempting to retrieve secret '$SendGridSecretName'..."
-        $secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SendGridSecretName -AsPlainText -ErrorAction Stop
-        $SendGridApiKey = $secret
-        Write-Output "✓ SendGrid API Key retrieved successfully from Key Vault '$KeyVaultName'"
-        Write-Output "✓ Secret length: $($SendGridApiKey.Length) characters"
-    } catch {
-        Write-Output "✗ Failed to retrieve SendGrid API Key from Key Vault '$KeyVaultName'"
-        Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-        Write-Output "Error Message: $($_.Exception.Message)"
-        
-        if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*not authorized*") {
-            Write-Output ""
-            Write-Output "PERMISSION ISSUE DETECTED:"
-            Write-Output "The Managed Identity does not have permission to access Key Vault secrets."
-            Write-Output ""
-            Write-Output "TO FIX THIS:"
-            Write-Output "1. Go to Azure Portal > Key Vault: $KeyVaultName"
-            Write-Output "2. Navigate to 'Access policies' or 'Access control (IAM)'"
-            Write-Output "3. Add the Automation Account's Managed Identity with 'Get' permission for Secrets"
-            Write-Output "   OR assign 'Key Vault Secrets User' role to the Managed Identity"
-        } elseif ($_.Exception.Message -like "*not found*" -or $_.Exception.Message -like "*404*") {
-            Write-Output ""
-            Write-Output "SECRET NOT FOUND:"
-            Write-Output "The secret '$SendGridSecretName' does not exist in Key Vault '$KeyVaultName'"
-            Write-Output "Please verify the secret name is correct."
-        }
-        
-        $SendGridApiKey = ""
+    # Now try to get the secret
+    Write-Output "Attempting to retrieve secret '$SendGridSecretName'..."
+    $secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SendGridSecretName -AsPlainText -ErrorAction Stop
+    $SendGridApiKey = $secret
+    Write-Output "✓ SendGrid API Key retrieved successfully from Key Vault '$KeyVaultName'"
+    Write-Output "✓ Secret length: $($SendGridApiKey.Length) characters"
+} catch {
+    Write-Output "✗ Failed to retrieve SendGrid API Key from Key Vault '$KeyVaultName'"
+    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Output "Error Message: $($_.Exception.Message)"
+    
+    if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*not authorized*") {
+        Write-Output ""
+        Write-Output "PERMISSION ISSUE DETECTED:"
+        Write-Output "The Managed Identity does not have permission to access Key Vault secrets."
+        Write-Output ""
+        Write-Output "TO FIX THIS:"
+        Write-Output "1. Go to Azure Portal > Key Vault: $KeyVaultName"
+        Write-Output "2. Navigate to 'Access policies' or 'Access control (IAM)'"
+        Write-Output "3. Add the Automation Account's Managed Identity with 'Get' permission for Secrets"
+        Write-Output "   OR assign 'Key Vault Secrets User' role to the Managed Identity"
+    } elseif ($_.Exception.Message -like "*not found*" -or $_.Exception.Message -like "*404*") {
+        Write-Output ""
+        Write-Output "SECRET NOT FOUND:"
+        Write-Output "The secret '$SendGridSecretName' does not exist in Key Vault '$KeyVaultName'"
+        Write-Output "Please verify the secret name is correct."
     }
-    Write-Output "========================================"
-} else {
-    Write-Output "Key Vault Name or Secret Name not provided. Skipping Key Vault access."
+    
     $SendGridApiKey = ""
 }
+Write-Output "========================================"
 
 $scriptStart = Get-Date
 
@@ -404,12 +399,12 @@ $filesToAttach = @("$exportDir\AllGuestUsersDebug.csv", "$exportDir\GuestsToDisa
 foreach ($f in $filesToAttach) {
     if (Test-Path $f) {
         $ext = [IO.Path]::GetExtension($f).ToLower()
-        if ($ext -eq ".csv") {
-            $mimeType = "text/csv"
+        $mimeType = if ($ext -eq ".csv") {
+            "text/csv"
         } elseif ($ext -eq ".txt") {
-            $mimeType = "text/plain"
+            "text/plain"
         } else {
-            $mimeType = "application/octet-stream"
+            "application/octet-stream"
         }
         $attachments += @{ content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); filename = [IO.Path]::GetFileName($f); type = $mimeType; disposition = "attachment" }
     } else {
