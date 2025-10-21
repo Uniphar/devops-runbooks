@@ -117,6 +117,9 @@ try {
 
 $InactiveDaysToDisableMax = $InactiveDaysToRemove
 
+# Process recipient emails into an array for SendGrid
+$toRecipients = $ToEmail.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { @{ email = $_ } }
+
 # Get all guest users
 Write-Output "========================================"
 Write-Output "RETRIEVING GUEST USERS FROM MICROSOFT GRAPH:"
@@ -155,7 +158,7 @@ try {
 
     # Prepare SendGrid email payload
     $emailBody = @{
-        personalizations = @(@{ to = @(@{ email = $ToEmail }) })
+        personalizations = @(@{ to = $toRecipients })
         from             = @{ email = $FromEmail }
         subject          = "Inactive Guest Accounts Cleanup - MS Graph Beta Request Failed"
         content          = @(@{ type = "text/plain"; value = $errorMsg })
@@ -441,7 +444,7 @@ Write-Output "Test Mode: $TestMode"
 Write-Output "========================================"
 
 $emailBody = @{
-    personalizations = @(@{ to = @(@{ email = $ToEmail }) })
+    personalizations = @(@{ to = $toRecipients })
     from             = @{ email = $FromEmail }
     subject          = $emailSubject
     content          = @(@{ type = "text/plain"; value = $emailContent })
