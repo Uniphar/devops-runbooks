@@ -89,74 +89,9 @@ Write-Host "SendGridRecipientEmailAddresses value: $SendGridRecipientEmailAddres
 
 # --- Function definitions moved here (all functions) ---
 
-# Ensure required modules are installed (best-effort, non-interactive)
-function Ensure-RequiredModules {
-    param(
-        [string[]]$ModuleNames = @('Az.Accounts','Az.Storage','Az.KeyVault','Microsoft.Graph')
-    )
-
-    Write-Host "Checking and installing required PowerShell modules: $($ModuleNames -join ', ')" -ForegroundColor Cyan
-
-    # Ensure NuGet provider available for older systems
-    try {
-        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-            Install-PackageProvider -Name NuGet -Force -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
-        }
-    }
-    catch {
-        Write-Warning "Could not ensure NuGet provider: $($_.Exception.Message)"
-    }
-
-    # Ensure PSGallery repository exists
-    try {
-        $psGallery = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
-        if (-not $psGallery) {
-            Write-Host 'Registering PSGallery repository (untrusted by default).' -ForegroundColor Yellow
-            Register-PSRepository -Default -ErrorAction SilentlyContinue | Out-Null
-        }
-    }
-    catch {
-        Write-Warning "Could not register PSGallery repository: $($_.Exception.Message)"
-    }
-
-    foreach ($m in $ModuleNames) {
-        try {
-            if (Get-Module -ListAvailable -Name $m -ErrorAction SilentlyContinue) {
-                Write-Host "Module '$m' already available." -ForegroundColor DarkGray
-                continue
-            }
-
-            Write-Host "Installing module '$m' to CurrentUser scope (best-effort)." -ForegroundColor Cyan
-            Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
-            Write-Host "Installed module '$m'." -ForegroundColor Green
-        }
-        catch {
-            Write-Warning "Failed to install module '$m': $($_.Exception.Message)"
-        }
-    }
-
-    # ActiveDirectory (RSAT) is not always available via PSGallery. Try Windows capability as a best-effort on Windows hosts.
-    try {
-        if (-not (Get-Module -ListAvailable -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
-            if ($IsWindows -and (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue)) {
-                Write-Host 'ActiveDirectory module not found. Attempting to enable RSAT ActiveDirectory capability (requires admin).' -ForegroundColor Yellow
-                try {
-                    Add-WindowsCapability -Online -Name 'Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0' -ErrorAction Stop | Out-Null
-                    Write-Host 'Requested RSAT ActiveDirectory capability install. Module may be available after reboot/logon.' -ForegroundColor Green
-                }
-                catch {
-                    Write-Warning "Could not install RSAT ActiveDirectory via Add-WindowsCapability: $($_.Exception.Message)"
-                }
-            }
-            else {
-                Write-Warning 'ActiveDirectory module not found. On non-Windows or restricted hosts this must be provided by the environment (RSAT or Hybrid Worker image).'
-            }
-        }
-    }
-    catch {
-        Write-Warning "ActiveDirectory availability check failed: $($_.Exception.Message)"
-    }
-}
+# NOTE: The Ensure-RequiredModules helper was removed per request. The execution environment
+# (Azure Automation runbook worker, Hybrid Worker images, or local admin) must provide the
+# required modules: Az.Accounts, Az.Storage, Az.KeyVault, Microsoft.Graph, and ActiveDirectory.
 
 # Fetch SendGrid API key from Key Vault and send email with attachments
 function Get-SecretFromKeyVault {
@@ -442,10 +377,8 @@ $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $outputpath = Join-Path $localtempdir "disable_leavers_report_${timestamp}.csv"
 
 # Initialize Azure and Graph contexts (Managed Identity when available)
-# Ensure required modules are present (best-effort installer)
-Write-Host "About to call Ensure-RequiredModules..." -ForegroundColor Cyan
-Ensure-RequiredModules
-Write-Host "Ensure-RequiredModules completed" -ForegroundColor Cyan
+# Required modules must be provided by the execution environment (Azure Automation runbook worker,
+# Hybrid Worker image, or the local administrator). This script no longer performs module installs.
 
 # Initialize Azure and Graph contexts (Managed Identity when available)
 Write-Host "About to initialize Azure context..." -ForegroundColor Cyan
