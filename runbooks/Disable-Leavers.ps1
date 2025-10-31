@@ -106,13 +106,6 @@ Write-Verbose "SendGridRecipientEmailAddresses value: $SendGridRecipientEmailAdd
 # (Azure Automation runbook worker, Hybrid Worker images, or local admin) must provide the
 # required modules: Az.Accounts, Az.Storage, Az.KeyVault, Microsoft.Graph, and ActiveDirectory.
 
-# Fetch SendGrid API key from Key Vault and send email with attachments
-function Get-SecretFromKeyVault {
-    param([string]$VaultName, [string]$SecretName)
-        return (Get-AzKeyVaultSecret -VaultName $VaultName -Name $SecretName -AsPlainText -ErrorAction Stop)
-    
-}
-
 function Get-MimeTypeForFile {
     param([string]$Path)
     $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
@@ -255,7 +248,7 @@ function Initialize-OnPremAD {
         if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) { throw 'ActiveDirectory module not found (RSAT not installed?)' }
         if ($PSVersionTable.PSEdition -eq 'Core') {
             # Use WindowsCompatibility layer to load AD module in PS7 without switching shells
-            Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
+        Import-Module ActiveDirectory -UseWindowsPowerShell -ErrorAction Stop | Out-Null
         }
         else {
             Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
@@ -291,6 +284,13 @@ function Get-OnPremAdCredential {
     catch {
         throw "Failed to retrieve on-prem AD credentials from Key Vault: $($_.Exception.Message)."
     }
+}
+
+# Escape special characters in LDAP filter values
+function Escape-LdapFilterValue {
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    return $Value.Replace('\', '\5c').Replace('*', '\2a').Replace('(', '\28').Replace(')', '\29').Replace([char]0, '\00')
 }
 
 # Simple retry helper with exponential backoff and optional Retry-After header support
@@ -647,7 +647,7 @@ try {
         "Files to attach: $($filestosend -join ', ')" | Out-File -FilePath $logpath -Append
 
     Write-Verbose 'Retrieving SendGrid API key from Key Vault...'
-        $sendGridApiKey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
+        $sendGridApiKey = Get-AzKeyVaultSecret -VaultName $SecretsKeyVaultName -Name $SendGridApiKeySecretName -AsPlainText -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($sendGridApiKey)) { throw 'SendGrid API key retrieved is empty.' }
     Write-Verbose 'Sending report email via SendGrid...'
         try {
