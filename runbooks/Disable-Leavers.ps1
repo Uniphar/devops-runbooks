@@ -382,7 +382,7 @@ try {
     if (Initialize-OnPremAD -Server $OnPremDomainController) {
         $onpremavailable = $true
         Write-Verbose 'Early On-prem AD initialization succeeded.'
-    
+    }
     else {
         Write-Verbose 'Early On-prem AD initialization did not succeed; continuing without on-prem AD.'
         $onpremavailable = $false
