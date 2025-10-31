@@ -82,7 +82,7 @@ param(
     [string]$SendGridSenderEmailAddress,
     [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")]
     [string[]]$SendGridRecipientEmailAddresses,
-    [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send")]
+    [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")]
     [string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
     [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")]
     [switch]$DisableAccounts
