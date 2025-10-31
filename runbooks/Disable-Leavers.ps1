@@ -60,19 +60,32 @@ pwsh -File .\runbooks\Disable-Leavers.ps1 -StorageAccountName unipharsftp -Conta
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Azure Storage account name (e.g., 'unipharsftp')")][string]$StorageAccountName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the blob container name (e.g., 'workday')")][string]$ContainerName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the CSV blob name (e.g., 'Leavers_Report_-_Active_Directory_-_IT.csv')")][string]$BlobName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the FQDN of the on-premises domain controller (e.g., 'dc117.uni.local')")][string]$OnPremDomainController,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the on-prem AD username (e.g., 'OnPremADUser')")][string]$OnPremAdUsernameSecretName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the on-prem AD password (e.g., 'OnPremADPassword')")][string]$OnPremAdPassSecretName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for AD credentials (e.g., 'UniPharADKeyVault') - stores on-premises AD username and password secrets")][string]$AdKeyVaultName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for API credentials (e.g., 'UniPharSecretsKeyVault') - stores SendGrid API key and other external service credentials")][string]$SecretsKeyVaultName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the SendGrid API key (e.g., 'SendGridApiKey')")][string]$SendGridApiKeySecretName,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter the sender email address for SendGrid (e.g., 'noreply@uniphar.ie')")][string]$SendGridSenderEmailAddress,
-    [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")][string[]]$SendGridRecipientEmailAddresses,
-    [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send)")][string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
-    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")][switch]$DisableAccounts
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the Azure Storage account name")]
+    [string]$StorageAccountName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the blob container name")]
+    [string]$ContainerName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the CSV blob name")]
+    [string]$BlobName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the FQDN of the on-premises domain controller")]
+    [string]$OnPremDomainController,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the on-prem AD username")]
+    [string]$OnPremAdUsernameSecretName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the on-prem AD password")]
+    [string]$OnPremAdPassSecretName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for AD credentials (e.g., 'UniPharADKeyVault') - stores on-premises AD username and password secrets")]
+    [string]$AdKeyVaultName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault name for API credentials (e.g., 'UniPharSecretsKeyVault') - stores SendGrid API key and other external service credentials")]
+    [string]$SecretsKeyVaultName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the Key Vault secret name containing the SendGrid API key (e.g., 'SendGridApiKey')")]
+    [string]$SendGridApiKeySecretName,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter the sender email address for SendGrid (e.g., 'noreply@uniphar.ie')")]
+    [string]$SendGridSenderEmailAddress,
+    [Parameter(Mandatory = $true, HelpMessage = "Enter recipient email addresses separated by commas (e.g., 'it@uniphar.com,admin@uniphar.com')")]
+    [string[]]$SendGridRecipientEmailAddresses,
+    [Parameter(Mandatory = $false, HelpMessage = "Enter SendGrid API endpoint URL (default: https://api.sendgrid.com/v3/mail/send")]
+    [string]$SendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send',
+    [Parameter(Mandatory = $false, HelpMessage = "Check this box to actually disable user accounts. Leave unchecked for reports only (safe mode)")]
+    [switch]$DisableAccounts
 )
 
 # If Azure Automation passes a single comma-separated string, convert to string array
@@ -83,9 +96,9 @@ if ($SendGridRecipientEmailAddresses -is [string]) {
 $ErrorActionPreference = 'Stop'
 
 # Add debugging to identify where casting error occurs
-Write-Host "Script starting - parameters received successfully" -ForegroundColor Green
-Write-Host "SendGridRecipientEmailAddresses type: $($SendGridRecipientEmailAddresses.GetType().FullName)" -ForegroundColor Cyan
-Write-Host "SendGridRecipientEmailAddresses value: $SendGridRecipientEmailAddresses" -ForegroundColor Cyan
+Write-Verbose "Script starting - parameters received successfully"
+Write-Verbose "SendGridRecipientEmailAddresses type: $($SendGridRecipientEmailAddresses.GetType().FullName)"
+Write-Verbose "SendGridRecipientEmailAddresses value: $SendGridRecipientEmailAddresses"
 
 # --- Function definitions moved here (all functions) ---
 
@@ -124,7 +137,7 @@ function Send-ReportViaSendGrid {
         [string]$Endpoint,
         [object]$AttachmentPaths
     )
-    Write-Host "SendGrid function called." -ForegroundColor Gray
+    Write-Verbose "SendGrid function called."
 
     # --- Normalize Recipients into an array of PSCustomObject with an 'email' property ---
     $RecipientArray = @()
@@ -184,9 +197,9 @@ function Send-ReportViaSendGrid {
     $headers = @{ Authorization = "Bearer $ApiKey" }
     $json = $bodyobj | ConvertTo-Json -Depth 10
     try {
-        Write-Host "Invoking SendGrid API at $Endpoint with $($toarray.Count) recipient(s) and $($attachments.Count) attachment(s)." -ForegroundColor Cyan
-        $response = Invoke-RestMethod -Method Post -Uri $Endpoint -Headers $headers -Body $json -ContentType 'application/json' -ErrorAction Stop
-        Write-Host 'SendGrid report email sent.' -ForegroundColor Green
+    Write-Verbose "Invoking SendGrid API at $Endpoint with $($toarray.Count) recipient(s) and $($attachments.Count) attachment(s)."
+    $null = Invoke-RestMethod -Method Post -Uri $Endpoint -Headers $headers -Body $json -ContentType 'application/json' -ErrorAction Stop
+        Write-Verbose 'SendGrid report email sent.'
         return $true
     }
     catch {
@@ -258,7 +271,7 @@ function Initialize-OnPremAD {
     Get-ADDomainController @dcparams | Out-Null
 
         $script:OnPremADReady = $true
-        Write-Host 'On-prem AD connectivity OK.' -ForegroundColor Green
+            Write-Verbose 'On-prem AD connectivity OK.'
         return $true
     }
     catch {
@@ -317,41 +330,18 @@ function Invoke-WithRetry {
 
 # --- End moved functions ---
 
-# Handle recipient email addresses - Azure Automation may pass as string or array
-Write-Host "Starting recipient email processing..." -ForegroundColor Cyan
-try {
-    Write-Host "Checking recipient type..." -ForegroundColor Cyan
-    if ($SendGridRecipientEmailAddresses -is [string]) {
-        Write-Host "Processing as string" -ForegroundColor Cyan
-        # Convert comma-separated string to array
-        $RecipientEmailArray = @($SendGridRecipientEmailAddresses -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    } elseif ($SendGridRecipientEmailAddresses -is [array]) {
-        Write-Host "Processing as array" -ForegroundColor Cyan
-        # Already an array, just ensure trimmed and non-empty
-        $RecipientEmailArray = @($SendGridRecipientEmailAddresses | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    } else {
-        Write-Host "Processing as other type" -ForegroundColor Cyan
-        # Convert to array for consistency
-        $RecipientEmailArray = @($SendGridRecipientEmailAddresses | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    }
-
-    # Ensure RecipientEmailArray is properly initialized as an array
-    $RecipientEmailArray = @($RecipientEmailArray)
-    Write-Host "Recipients processed: $($RecipientEmailArray.Count) addresses" -ForegroundColor Green
-}
-catch {
-    Write-Warning "Error processing recipient email addresses: $($_.Exception.Message)"
-    $RecipientEmailArray = @()
-}
+# Handle recipient email addresses - normalize, trim, remove empties, unique-sort
+$RecipientEmailArray = @($SendGridRecipientEmailAddresses | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrEmpty($_) } | Sort-Object -Unique)
+Write-Verbose "Recipients processed: $($RecipientEmailArray.Count) addresses"
 
 # Coerce DisableAccounts to boolean. Azure Automation may pass it as a string.
-Write-Host "Processing DisableAccounts parameter..." -ForegroundColor Cyan
-Write-Host "DisableAccounts type: $($DisableAccounts.GetType().FullName)" -ForegroundColor Cyan
-Write-Host "DisableAccounts value: $DisableAccounts" -ForegroundColor Cyan
+Write-Verbose "Processing DisableAccounts parameter..."
+Write-Verbose "DisableAccounts type: $($DisableAccounts.GetType().FullName)"
+Write-Verbose "DisableAccounts value: $DisableAccounts"
 
 $DisableAccountsBool = $false
 if ($DisableAccounts -is [string]) {
-    Write-Host "Processing DisableAccounts as string" -ForegroundColor Cyan
+    Write-Verbose "Processing DisableAccounts as string"
     switch ($DisableAccounts.Trim().ToLower()) {
         '1' { $DisableAccountsBool = $true; break }
         'true' { $DisableAccountsBool = $true; break }
@@ -365,7 +355,7 @@ if ($DisableAccounts -is [string]) {
 elseif ($DisableAccounts -is [bool]) { $DisableAccountsBool = $DisableAccounts }
 elseif ($DisableAccounts -is [int]) { $DisableAccountsBool = ([int]$DisableAccounts -ne 0) }
 else { $DisableAccountsBool = [bool]$DisableAccounts }
-Write-Host "DisableAccounts coerced to boolean: $DisableAccountsBool" -ForegroundColor Green
+Write-Verbose "DisableAccounts coerced to boolean: $DisableAccountsBool"
 
 # Disable-Leavers script - Process Workday leavers and disable accounts
 # Resolve system temp directory and ensure it exists
@@ -381,24 +371,24 @@ $outputpath = Join-Path $localtempdir "disable_leavers_report_${timestamp}.csv"
 # Hybrid Worker image, or the local administrator). This script no longer performs module installs.
 
 # Initialize Azure and Graph contexts (Managed Identity when available)
-Write-Host "About to initialize Azure context..." -ForegroundColor Cyan
+Write-Verbose "About to initialize Azure context..."
 Initialize-AzureContext
-Write-Host "Azure context initialized" -ForegroundColor Cyan
+Write-Verbose "Azure context initialized"
 
-Write-Host "About to initialize Graph context..." -ForegroundColor Cyan
+Write-Verbose "About to initialize Graph context..."
 Initialize-GraphContext
-Write-Host "Graph context initialized" -ForegroundColor Cyan
+Write-Verbose "Graph context initialized"
 
 # --- Try to initialize on-prem AD early so report-only runs can also probe AD ---
 $onpremavailable = $false
 try {
-    Write-Host "Attempting early on-prem AD initialization (to allow report-only AD matching)..." -ForegroundColor Cyan
+    Write-Verbose "Attempting early on-prem AD initialization (to allow report-only AD matching)..."
     if (Initialize-OnPremAD -Server $OnPremDomainController) {
         $onpremavailable = $true
-        Write-Host 'Early On-prem AD initialization succeeded.' -ForegroundColor Green
-    }
+        Write-Verbose 'Early On-prem AD initialization succeeded.'
+    
     else {
-        Write-Host 'Early On-prem AD initialization did not succeed; continuing without on-prem AD.' -ForegroundColor Yellow
+        Write-Verbose 'Early On-prem AD initialization did not succeed; continuing without on-prem AD.'
         $onpremavailable = $false
     }
 }
@@ -415,7 +405,7 @@ catch {
     throw "Failed to create storage context: $($_.Exception.Message)"
 }
 $inputpath = Join-Path $localtempdir (Split-Path -Leaf $BlobName)
-Write-Host "Downloading input from Azure Storage: $StorageAccountName/$ContainerName/$BlobName -> $inputpath" -ForegroundColor Cyan
+Write-Verbose "Downloading input from Azure Storage: $StorageAccountName/$ContainerName/$BlobName -> $inputpath"
 try {
     Get-AzStorageBlobContent -Container $ContainerName -Blob $BlobName -Destination $inputpath -Context $storagecontext -Force -ErrorAction Stop | Out-Null
 }
@@ -425,14 +415,14 @@ catch {
 
 # Graph context is already initialized above via Initialize-GraphContext
 
-Write-Host "Loading input CSV: $inputpath" -ForegroundColor Cyan
+Write-Verbose "Loading input CSV: $inputpath"
 $rows = Import-Csv -Path $inputpath -ErrorAction Stop
 if (-not $rows) {
     Write-Warning "No rows loaded from CSV. Exiting."
     return
 }
 
-Write-Host "Retrieving users from Entra ID (this may take time in large tenants)..." -ForegroundColor Cyan
+Write-Verbose "Retrieving users from Entra ID (this may take time in large tenants)..."
 # Single directory pull (avoid N x API calls). Adjust properties as needed.
 $allusers = Invoke-WithRetry -Script {
     Get-MgUser -All -Property id, employeeId, mail, displayName, userPrincipalName, accountEnabled -ConsistencyLevel eventual -ErrorAction Stop |
@@ -504,14 +494,14 @@ foreach ($row in $rows) {
         # Write-Verbose "No match for row $processed/$total (EmployeeId=$employeeId, Email=$email, DisplayName=$displayName)"
     }
 
-    if (($processed % 200) -eq 0) { Write-Host "Processed $processed / $total" -ForegroundColor DarkGray }
+    if (($processed % 200) -eq 0) { Write-Verbose "Processed $processed / $total" }
 }
 
 # After matching loop, disable matched enabled accounts if DisableAccounts switch is enabled
 $rows | Add-Member -NotePropertyName DisabledActionResult -NotePropertyValue $null -Force
 
 if ($DisableAccountsBool) {
-    Write-Host "Disabling matched enabled cloud accounts..." -ForegroundColor Yellow
+    Write-Verbose "Disabling matched enabled cloud accounts..."
     $matchedenabled = $rows | Where-Object { $_.MatchSource -and $_.AccountEnabled -eq $true }
 
     # Use early on-prem AD initialization result
@@ -535,7 +525,7 @@ if ($DisableAccountsBool) {
 
     # On-prem disable ALL matched accounts (even those already disabled in Entra)
     if ($onpremavailable) {
-        Write-Host "Disabling matched accounts on-prem (all matched, regardless of cloud state)..." -ForegroundColor Yellow
+    Write-Verbose "Disabling matched accounts on-prem (all matched, regardless of cloud state)..."
         $matchedall = $rows | Where-Object { $_.MatchSource }
         foreach ($r in $matchedall) {
             $upntodisable = $r.UPN
@@ -569,7 +559,7 @@ if ($DisableAccountsBool) {
     }
 }
 else {
-    Write-Host "DisableAccounts is false - no accounts will be disabled" -ForegroundColor Yellow
+    Write-Verbose "DisableAccounts is false - no accounts will be disabled"
 }
 
 # Reporting setup (reuse same $timestamp as output file)
@@ -582,7 +572,7 @@ foreach ($__d in $__pathstoensure) { if ($__d -and -not (Test-Path $__d)) { New-
 "Output CSV (will be written): $outputpath" | Out-File -FilePath $logpath -Append
 "DisableAccounts parameter: $DisableAccounts (coerced: $DisableAccountsBool)" | Out-File -FilePath $logpath -Append
 
-Write-Host "Writing output CSV: $outputpath" -ForegroundColor Cyan
+Write-Verbose "Writing output CSV: $outputpath"
 $rows | Export-Csv -Path $outputpath -NoTypeInformation -ErrorAction Stop
 
 # Build list of files to send (kept in temp directory)
@@ -590,7 +580,7 @@ try {
     $filestosend = @($inputpath, $outputpath, $logpath) | Where-Object { $_ -and (Test-Path $_) }
     # Ensure $filestosend is an array
     $filestosend = @($filestosend)
-    Write-Host "Files to send: $($filestosend.Count) files" -ForegroundColor Green
+    Write-Verbose "Files to send: $($filestosend.Count) files"
 }
 catch {
     Write-Warning "Error processing files to send: $($_.Exception.Message)"
@@ -647,7 +637,7 @@ if ($DisableAccountsBool -and $onpremdisableerr.Count -gt 0) {
 }
 
 "Run completed: $(Get-Date)" | Out-File -FilePath $logpath -Append
-Write-Host "Report log written: $logpath" -ForegroundColor Green
+Write-Verbose "Report log written: $logpath"
 
 # SendGrid email sending
 try {
@@ -655,15 +645,15 @@ try {
         Write-Warning 'No recipient email addresses resolved; skipping SendGrid email.'
     } else {
         # Log recipients and attachments for diagnosis (useful when script runs in different environments)
-        Write-Host "Resolved recipients: $($RecipientEmailArray -join ', ')" -ForegroundColor Cyan
+    Write-Verbose "Resolved recipients: $($RecipientEmailArray -join ', ')"
         "Resolved recipients: $($RecipientEmailArray -join ', ')" | Out-File -FilePath $logpath -Append
-        Write-Host "Files to attach: $($filestosend -join ', ')" -ForegroundColor Cyan
+    Write-Verbose "Files to attach: $($filestosend -join ', ')"
         "Files to attach: $($filestosend -join ', ')" | Out-File -FilePath $logpath -Append
 
-        Write-Host 'Retrieving SendGrid API key from Key Vault...' -ForegroundColor Cyan
+    Write-Verbose 'Retrieving SendGrid API key from Key Vault...'
         $sendGridApiKey = Get-SecretFromKeyVault -VaultName $SecretsKeyVaultName -SecretName $SendGridApiKeySecretName
         if ([string]::IsNullOrWhiteSpace($sendGridApiKey)) { throw 'SendGrid API key retrieved is empty.' }
-        Write-Host 'Sending report email via SendGrid...' -ForegroundColor Cyan
+    Write-Verbose 'Sending report email via SendGrid...'
         try {
             $sent = Send-ReportViaSendGrid -ApiKey $sendGridApiKey -FromEmail $SendGridSenderEmailAddress -Recipients $RecipientEmailArray -Subject 'disabling leavers report' -Endpoint $SendGridApiEndpoint -AttachmentPaths $filestosend
             if ($sent) { "SendGrid: Email sent successfully at $(Get-Date)" | Out-File -FilePath $logpath -Append }
@@ -679,5 +669,5 @@ catch {
     Write-Warning "SendGrid email step failed: $($_.Exception.Message)"
 }
 
-Write-Host "Script completed successfully." -ForegroundColor Green
-Write-Host "Files processed: $($filestosend -join ', ')" -ForegroundColor Green
+Write-Output "Script completed successfully."
+Write-Output "Files processed: $($filestosend -join ', ')"
