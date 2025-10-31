@@ -109,12 +109,8 @@ Write-Verbose "SendGridRecipientEmailAddresses value: $SendGridRecipientEmailAdd
 # Fetch SendGrid API key from Key Vault and send email with attachments
 function Get-SecretFromKeyVault {
     param([string]$VaultName, [string]$SecretName)
-    try {
         return (Get-AzKeyVaultSecret -VaultName $VaultName -Name $SecretName -AsPlainText -ErrorAction Stop)
-    }
-    catch {
-        throw "Unable to retrieve secret '$SecretName' from Key Vault '$VaultName': $($_.Exception.Message)"
-    }
+    
 }
 
 function Get-MimeTypeForFile {
