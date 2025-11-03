@@ -30,7 +30,7 @@ param (
 )
 
 # Use Azure Automation temp path ($env:TEMP) when available; fallback to C:\temp for local testing.
-if ($env:AZUREPS_HOST_ENVIRONMENT) {
+if ($env:AUTOMATION_ACCOUNT_NAME) {
     # In Azure Automation, $env:TEMP is the correct sandbox temporary path.
     $TempPath = $env:TEMP
 }
