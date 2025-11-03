@@ -253,33 +253,10 @@ Try {
     
     # Use streaming parser instead of ConvertFrom-Csv for large files (avoids memory issues in sandbox)
     $csvContent = $ProductInfoRequest.Content
-    $lines = $csvContent -split "`n" | Where-Object { $_.Trim().Length -gt 0 }
-    
-    # Find the header line (skip empty lines and find first line with reasonable column count)
-    $headerLineIndex = 0
-    $headerLine = $null
-    $headers = @()
-    for ($h = 0; $h -lt [Math]::Min(10, $lines.Count); $h++) {
-        $testHeaders = $lines[$h] -split ',' | ForEach-Object { $_.Trim('"').Trim() }
-        if ($testHeaders.Count -ge 3) {  # Real header should have at least 3 columns
-            $headerLine = $lines[$h]
-            $headers = $testHeaders
-            $headerLineIndex = $h
-            break
-        }
-    }
-    
-    if ($headers.Count -lt 3) {
-        throw "Could not find valid CSV header (need at least 3 columns)"
-    }
-    
-    Write-Output "DEBUG: Found $($lines.Count) lines, $(($headers).Count) columns"
-    Write-Output "DEBUG: First header: $($headers[0])"
-    
-    $ProductData = @()
-    for ($i = $headerLineIndex + 1; $i -lt $lines.Count; $i++) {
-        if (($i % 500) -eq 0) {
-            Write-Output "DEBUG: Parsed $i rows so far..."
+    $parsedCsv = Parse-ProductInfoCsv -CsvContent $csvContent
+    $lines = $parsedCsv.Lines
+    $headers = $parsedCsv.Headers
+    $headerLineIndex = $parsedCsv.HeaderLineIndex
         }
         $line = $lines[$i]
         if ($line.Trim().Length -eq 0) { continue }
