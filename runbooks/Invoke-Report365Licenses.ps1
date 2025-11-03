@@ -601,7 +601,7 @@ ForEach ($TableRow in $XML.table.SelectNodes("tr")) {
     $TableRow.SetAttribute("class", "tablerow")
     ## If row has TD and TD[5] is 5 or less
     If (($TableRow.td) -and ([int]$TableRow.td[5] -le 5)) {
-        ## tag the TD with eirher the color for "warn" or "pass" defined in the heading
+        ## tag the TD with either the color for "warn" or "pass" defined in the heading
         $TableRow.SelectNodes("td")[5].SetAttribute("class", "warn")
     }
     ElseIf (($TableRow.td) -and ([int]$TableRow.td[5] -gt 5)) {
