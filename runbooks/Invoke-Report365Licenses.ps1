@@ -47,38 +47,13 @@ if (!(Test-Path -Path $TempPath)) {
 $CSVOutputFile = Join-Path -Path $TempPath -ChildPath "Microsoft365LicenseServicePlans.csv"
 $ReportFile = Join-Path -Path $TempPath -ChildPath "Microsoft365LicenseServicePlans.html"
 
-# --- SendGrid and Key Vault integration ---
-# Retrieve the SendGrid API key from Azure Key Vault using the Automation Account managed identity.
-# The managed identity requires Key Vault access (Get secrets) or an appropriate role assignment.
-Write-Output "========================================"
-Write-Output "KEY VAULT ACCESS DEBUG INFORMATION:"
-Write-Output "========================================"
-Write-Output "Attempting to retrieve SendGrid secret from Key Vault (managed identity will be used):"
-Write-Output "Key Vault Name: $KeyVaultName"
-Write-Output "Secret Name: $SendGridSecretName"
-
 Connect-AzAccount -Identity -ErrorAction Stop
 Write-Output "✓ Connected to Azure (Az) via managed identity"
 
-try {
-    # First, try to check if we can access the Key Vault
-    Write-Output "Testing Key Vault access..."
-    $kvTest = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction Stop
-    Write-Output "✓ Key Vault found: $($kvTest.VaultName) (Resource Group: $($kvTest.ResourceGroupName))"
-    # Now try to get the secret
-    Write-Output "Attempting to retrieve secret '$SendGridSecretName'..."
-    $secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SendGridSecretName -AsPlainText -ErrorAction Stop
-    $SendGridApiKey = $secret
-    Write-Output "✓ SendGrid API Key retrieved successfully from Key Vault '$KeyVaultName'"
-    Write-Output "✓ Secret length: $($SendGridApiKey.Length) characters"
-}
-catch {
-    Write-Output "✗ Failed to retrieve SendGrid API Key from Key Vault '$KeyVaultName'"
-    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-    Write-Output "Error Message: $($_.Exception.Message)"
-    $SendGridApiKey = ""
-}
-Write-Output "========================================"
+$secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SendGridSecretName -AsPlainText -ErrorAction Stop
+$SendGridApiKey = $secret
+Write-Output "✓ SendGrid API Key retrieved successfully from Key Vault '$KeyVaultName'"
+Write-Output "✓ Secret length: $($SendGridApiKey.Length) characters"
 
 # Connect to Microsoft Graph using the Automation Account managed identity.
 Write-Host "Connecting to Microsoft Graph using Automation Managed Identity..."
@@ -88,24 +63,11 @@ Write-Host "Connecting to Microsoft Graph using Automation Managed Identity..."
 ## - Organization.Read.All (Application): read organization details used by Get-MgOrganization
 # Note: when using -Identity (managed identity) do NOT pass -Scopes; passing -Scopes with -Identity causes a ParameterSet ambiguity error.
 
-Write-Output "DEBUG: About to call Connect-MgGraph -Identity"
-try {
-    Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop
-    Write-Output "✓ Connected to Microsoft Graph via Managed Identity"
-}
-catch {
-    Write-Output "✗ FAILED to connect to Microsoft Graph"
-    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-    Write-Output "Error Message: $($_.Exception.Message)"
-    Write-Output "Stack Trace: $($_.ScriptStackTrace)"
-    throw
-}
+Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop
+Write-Output "✓ Connected to Microsoft Graph via Managed Identity"
 
 # Verify connection and permissions
-Write-Output "========================================"
 Write-Output "MICROSOFT GRAPH CONNECTION DEBUG:"
-Write-Output "========================================"
-try {
     $mgContext = Get-MgContext
     Write-Output "✓ Graph Context Retrieved:"
     Write-Output "  Account: $($mgContext.Account)"
@@ -114,19 +76,6 @@ try {
     Write-Output "  Scopes: $($mgContext.Scopes -join ', ')"
     Write-Output "  AuthType: $($mgContext.AuthType)"
     Write-Output "  ContextScope: $($mgContext.ContextScope)"
-    
-    # Check if we have app-level permissions (not delegated)
-    if ($mgContext.AuthType -eq 'AppOnly') {
-        Write-Output "  ✓ Using App-Only (Application) permissions (suitable for runbook)"
-    }
-    elseif ($mgContext.AuthType -eq 'Delegated') {
-        Write-Output "  ⚠ Using Delegated permissions (may cause access issues in runbook)"
-    }
-} catch {
-    Write-Output "✗ Could not get Graph context: $($_.Exception.Message)"
-    Write-Output "Stack Trace: $($_.ScriptStackTrace)"
-}
-Write-Output "========================================"
 
 # Built-in friendly names for common licenses (fallback if Microsoft data unavailable). These are used
 # only when the Microsoft product names CSV cannot be downloaded or parsed.
@@ -272,7 +221,6 @@ try {
     throw
 }
 Write-Output "========================================"
-
 
 
 # It's used to resolve SKU and service plan code names to human-friendly values
