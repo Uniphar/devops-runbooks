@@ -665,7 +665,7 @@ if ($monitoredSkuIds.Count -gt 0) {
                 Write-Output "  $alertMessage"
                 $lowLicenseAlerts += [PSCustomObject]@{
                     LicenseName       = $skuDisplayName
-                    SkuId             = $skuId
+                    SkuId             = $sku.SkuId
                     AvailableLicenses = $availableUnits
                     Threshold         = $MinimumLicenseThreshold
                 }
