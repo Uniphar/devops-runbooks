@@ -17,43 +17,44 @@
 
 
 param (
-    [Parameter(Mandatory = $true)] [string]$KeyVaultName,
-    [Parameter(Mandatory = $true)] [string]$SendGridSecretName,
-    [Parameter(Mandatory = $true)] [string]$FromEmail,
-    [Parameter(Mandatory = $true)] [string]$ToEmail,
-    [Parameter(Mandatory = $false)] [string]$MonitorSkuId1 = "",
-    [Parameter(Mandatory = $false)] [string]$MonitorSkuId2 = "",
-    [Parameter(Mandatory = $false)] [string]$MonitorSkuId3 = "",
-    [Parameter(Mandatory = $false)] [string]$MonitorSkuId4 = "",
-    [Parameter(Mandatory = $false)] [string]$MonitorSkuId5 = "",
-    [Parameter(Mandatory = $false)] [int]$MinimumLicenseThreshold = 5
+    [Parameter(Mandatory = $true)] [string]$keyVaultName,
+    [Parameter(Mandatory = $true)] [string]$sendGridSecretName,
+    [Parameter(Mandatory = $true)] [string]$fromEmail,
+    [Parameter(Mandatory = $true)] [string]$toEmail,
+    [Parameter(Mandatory = $false)] [string]$monitorSkuId1 = "",
+    [Parameter(Mandatory = $false)] [string]$monitorSkuId2 = "",
+    [Parameter(Mandatory = $false)] [string]$monitorSkuId3 = "",
+    [Parameter(Mandatory = $false)] [string]$monitorSkuId4 = "",
+    [Parameter(Mandatory = $false)] [string]$monitorSkuId5 = "",
+    [Parameter(Mandatory = $false)] [int]$minimumLicenseThreshold = 5
 )
 
 # Use Azure Automation temp path ($env:TEMP) when available; fallback to C:\temp for local testing.
+
 if ($env:AUTOMATION_ACCOUNT_NAME) {
     # In Azure Automation, $env:TEMP is the correct sandbox temporary path.
-    $TempPath = $env:TEMP
+    $tempPath = $env:TEMP
 }
 else {
     # Local testing fallback
-    $TempPath = "C:\\temp"
+    $tempPath = "C:\\temp"
 }
-if (!(Test-Path -Path $TempPath)) {
-    Write-Host "Creating temporary directory: $TempPath"
-    New-Item -Path $TempPath -ItemType Directory | Out-Null
+if (!(Test-Path -Path $tempPath)) {
+    Write-Host "Creating temporary directory: $tempPath"
+    New-Item -Path $tempPath -ItemType Directory | Out-Null
 }
 
-[string]$RunDate = Get-Date -format "dd-MMM-yyyy HH:mm:ss"
-$CSVOutputFile = Join-Path -Path $TempPath -ChildPath "Microsoft365LicenseServicePlans.csv"
-$ReportFile = Join-Path -Path $TempPath -ChildPath "Microsoft365LicenseServicePlans.html"
+[string]$runDate = Get-Date -format "dd-MMM-yyyy HH:mm:ss"
+$csvOutputFile = Join-Path -Path $tempPath -ChildPath "Microsoft365LicenseServicePlans.csv"
+$reportFile = Join-Path -Path $tempPath -ChildPath "Microsoft365LicenseServicePlans.html"
 
 Connect-AzAccount -Identity -ErrorAction Stop
-Write-Output "✓ Connected to Azure (Az) via managed identity"
+Write-Debug "✓ Connected to Azure (Az) via managed identity"
 
-$secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SendGridSecretName -AsPlainText -ErrorAction Stop
-$SendGridApiKey = $secret
-Write-Output "✓ SendGrid API Key retrieved successfully from Key Vault '$KeyVaultName'"
-Write-Output "✓ Secret length: $($SendGridApiKey.Length) characters"
+$secret = Get-AzKeyVaultSecret -VaultName $keyVaultName -Name $sendGridSecretName -AsPlainText -ErrorAction Stop
+$sendGridApiKey = $secret
+Write-Debug "✓ SendGrid API Key retrieved successfully from Key Vault '$keyVaultName'"
+Write-Debug "✓ Secret length: $($sendGridApiKey.Length) characters"
 
 # Connect to Microsoft Graph using the Automation Account managed identity.
 Write-Host "Connecting to Microsoft Graph using Automation Managed Identity..."
@@ -64,18 +65,18 @@ Write-Host "Connecting to Microsoft Graph using Automation Managed Identity..."
 # Note: when using -Identity (managed identity) do NOT pass -Scopes; passing -Scopes with -Identity causes a ParameterSet ambiguity error.
 
 Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop
-Write-Output "✓ Connected to Microsoft Graph via Managed Identity"
+Write-Debug "✓ Connected to Microsoft Graph via Managed Identity"
 
 # Verify connection and permissions
-Write-Output "MICROSOFT GRAPH CONNECTION DEBUG:"
+Write-Debug "MICROSOFT GRAPH CONNECTION DEBUG:"
     $mgContext = Get-MgContext
-    Write-Output "✓ Graph Context Retrieved:"
-    Write-Output "  Account: $($mgContext.Account)"
-    Write-Output "  AppName: $($mgContext.AppName)"
-    Write-Output "  TenantId: $($mgContext.TenantId)"
-    Write-Output "  Scopes: $($mgContext.Scopes -join ', ')"
-    Write-Output "  AuthType: $($mgContext.AuthType)"
-    Write-Output "  ContextScope: $($mgContext.ContextScope)"
+    Write-Debug "✓ Graph Context Retrieved:"
+    Write-Debug "  Account: $($mgContext.Account)"
+    Write-Debug "  AppName: $($mgContext.AppName)"
+    Write-Debug "  TenantId: $($mgContext.TenantId)"
+    Write-Debug "  Scopes: $($mgContext.Scopes -join ', ')"
+    Write-Debug "  AuthType: $($mgContext.AuthType)"
+    Write-Debug "  ContextScope: $($mgContext.ContextScope)"
 
 # Built-in friendly names for common licenses (fallback if Microsoft data unavailable). These are used
 # only when the Microsoft product names CSV cannot be downloaded or parsed.
@@ -198,70 +199,89 @@ $BuiltInSkuNames = @{
 }
 
 # Get the basic information about tenant subscriptions
-Write-Output "========================================"
-Write-Output "RETRIEVING SUBSCRIBED SKUs:"
-Write-Output "========================================"
-Write-Output "DEBUG: Calling Get-MgSubscribedSku (requires Directory.Read.All application permission)"
+Write-Debug "========================================"
+Write-Debug "RETRIEVING SUBSCRIBED SKUs:"
+Write-Debug "========================================"
+Write-Debug "DEBUG: Calling Get-MgSubscribedSku (requires Directory.Read.All application permission)"
 try {
-    [array]$Skus = Get-MgSubscribedSku -ErrorAction Stop
-    Write-Output "✓ Successfully retrieved $($Skus.Count) SKUs"
+    [array]$skus = Get-MgSubscribedSku -ErrorAction Stop
+    Write-Debug "✓ Successfully retrieved $($skus.Count) SKUs"
 } catch {
-    Write-Output "✗ FAILED to retrieve SKUs - This is likely a permissions issue"
-    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-    Write-Output "Error Message: $($_.Exception.Message)"
-    Write-Output "Stack Trace: $($_.ScriptStackTrace)"
-    Write-Output ""
-    Write-Output "TROUBLESHOOTING:"
-    Write-Output "1. Ensure the Automation Account managed identity has 'Directory.Read.All' application permission"
-    Write-Output "2. Admin consent must be granted for the permission (not just granted via IAM)"
-    Write-Output "3. The permission must be at APPLICATION LEVEL, not delegated"
-    Write-Output "4. Grant permission via: Entra ID > App registrations > (your app) > API permissions"
-    Write-Output "5. Verify: Entra ID > Enterprise applications > (your app) > Permissions > Admin consent status = 'Granted'"
-    Write-Output ""
+    Write-Debug "✗ FAILED to retrieve SKUs - This is likely a permissions issue"
+    Write-Error "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Error "Error Message: $($_.Exception.Message)"
+    Write-Debug "Stack Trace: $($_.ScriptStackTrace)"
+    Write-Debug ""
+    Write-Debug "TROUBLESHOOTING:"
+    Write-Debug "1. Ensure the Automation Account managed identity has 'Directory.Read.All' application permission"
+    Write-Debug "2. Admin consent must be granted for the permission (not just granted via IAM)"
+    Write-Debug "3. The permission must be at APPLICATION LEVEL, not delegated"
+    Write-Debug "4. Grant permission via: Entra ID > App registrations > (your app) > API permissions"
+    Write-Debug "5. Verify: Entra ID > Enterprise applications > (your app) > Permissions > Admin consent status = 'Granted'"
+    Write-Debug ""
     throw
 }
-Write-Output "========================================"
+Write-Debug "========================================"
 
 
 # It's used to resolve SKU and service plan code names to human-friendly values
-Write-Output "========================================"
-Write-Output "PRODUCT NAMES DOWNLOAD:"
-Write-Output "========================================"
-Write-Output "Attempting to download latest product names from Microsoft (with short timeout)..."
-$ProductDataAvailable = $false
-$ProductNamesFile = Join-Path -Path $TempPath -ChildPath "ProductNames.csv"
+Write-Debug "========================================"
+Write-Debug "PRODUCT NAMES DOWNLOAD:"
+Write-Debug "========================================"
+Write-Debug "Attempting to download latest product names from Microsoft (with short timeout)..."
+$productDataAvailable = $false
+$productNamesFile = Join-Path -Path $tempPath -ChildPath "ProductNames.csv"
 
 # Try to download the latest product names CSV from Microsoft (optional, non-blocking)
-Try {
+try {
     # Microsoft's official Product names and service plan identifiers for licensing
     # This URL is updated regularly by Microsoft
     $DirectCsvUrl = "https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv"
     
-    Write-Output "DEBUG: Starting direct download from: $DirectCsvUrl"
-    Write-Output "DEBUG: Current time: $(Get-Date -Format 'o')"
-    Write-Output "DEBUG: Timeout set to 10 seconds"
+    Write-Debug "DEBUG: Starting direct download from: $DirectCsvUrl"
+    Write-Debug "DEBUG: Current time: $(Get-Date -Format 'o')"
+    Write-Debug "DEBUG: Timeout set to 10 seconds"
     
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    Write-Output "DEBUG: Invoking Invoke-WebRequest..."
-    $ProductInfoRequest = Invoke-WebRequest -Uri $DirectCsvUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+    Write-Debug "DEBUG: Invoking Invoke-WebRequest..."
+    $productInfoRequest = Invoke-WebRequest -Uri $DirectCsvUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
     $sw.Stop()
-    Write-Output "DEBUG: Download completed in $($sw.ElapsedMilliseconds)ms"
+    Write-Debug "DEBUG: Download completed in $($sw.ElapsedMilliseconds)ms"
     
-    Write-Output "DEBUG: Response received, size: $($ProductInfoRequest.Content.Length) bytes"
-    Write-Output "DEBUG: Parsing CSV content using streaming parser..."
+    Write-Debug "DEBUG: Response received, size: $($productInfoRequest.Content.Length) bytes"
+    Write-Debug "DEBUG: Parsing CSV content using streaming parser..."
     $sw.Restart()
-    
-    # Use streaming parser instead of ConvertFrom-Csv for large files (avoids memory issues in sandbox)
-    $csvContent = $ProductInfoRequest.Content
-    $parsedCsv = Parse-ProductInfoCsv -CsvContent $csvContent
-    $lines = $parsedCsv.Lines
-    $headers = $parsedCsv.Headers
-    $headerLineIndex = $parsedCsv.HeaderLineIndex
+
+    # Use streaming parser instead of ConvertFrom-Csv for large files
+    $csvContent = $productInfoRequest.Content
+    $lines = $csvContent -split "`n" | Where-Object { $_.Trim().Length -gt 0 }
+
+    # Find the header line (skip empty lines and find first line with reasonable column count)
+    $headerLineIndex = 0
+    $headers = @()
+    for ($h = 0; $h -lt [Math]::Min(10, $lines.Count); $h++) {
+        $testHeaders = $lines[$h] -split ',' | ForEach-Object { $_.Trim('"').Trim() }
+        if ($testHeaders.Count -ge 3) {
+            $headers = $testHeaders
+            $headerLineIndex = $h
+            break
+        }
+    }
+
+    if ($headers.Count -lt 3) {
+        throw "Could not find valid CSV header (need at least 3 columns)"
+    }
+
+    Write-Debug "DEBUG: Found $($lines.Count) lines, $(($headers).Count) columns"
+
+    $productData = @()
+    for ($i = $headerLineIndex + 1; $i -lt $lines.Count; $i++) {
+        if (($i % 500) -eq 0) {
+            Write-Debug "DEBUG: Parsed $i rows so far..."
         }
         $line = $lines[$i]
         if ($line.Trim().Length -eq 0) { continue }
-        
-        # Simple CSV parser - split on comma, handling quoted fields
+
         $values = @()
         $current = ""
         $inQuotes = $false
@@ -279,78 +299,76 @@ Try {
             }
         }
         $values += $current.Trim('"').Trim()
-        
-        # Create object from headers and values
+
         $obj = [PSCustomObject]@{}
         for ($k = 0; $k -lt $headers.Count; $k++) {
-            $obj | Add-Member -NotePropertyName $headers[$k] -NotePropertyValue $values[$k]
+            $val = if ($k -lt $values.Count) { $values[$k] } else { "" }
+            $obj | Add-Member -NotePropertyName $headers[$k] -NotePropertyValue $val
         }
-        $ProductData += $obj
+        $productData += $obj
     }
-    
+
     $sw.Stop()
-    Write-Output "DEBUG: CSV parsed in $($sw.ElapsedMilliseconds)ms, row count: $($ProductData.Count)"
-    
-    Write-Output "DEBUG: Exporting to cache file: $ProductNamesFile"
+    Write-Debug "DEBUG: CSV parsed in $($sw.ElapsedMilliseconds)ms, row count: $($productData.Count)"
+
+    Write-Debug "DEBUG: Exporting to cache file: $productNamesFile"
     $sw.Restart()
-    $ProductData | Export-Csv -Path $ProductNamesFile -NoTypeInformation -Encoding UTF8
+    $productData | Export-Csv -Path $productNamesFile -NoTypeInformation -Encoding UTF8
     $sw.Stop()
-    Write-Output "DEBUG: Export completed in $($sw.ElapsedMilliseconds)ms"
-    
-    Write-Output "✓ Product names downloaded and cached successfully to: $ProductNamesFile"
-    $ProductDataAvailable = $true
+    Write-Debug "DEBUG: Export completed in $($sw.ElapsedMilliseconds)ms"
+
+    Write-Debug "✓ Product names downloaded and cached successfully to: $productNamesFile"
+    $productDataAvailable = $true
     
 }
-Catch {
-    Write-Output "✗ Could not download from direct URL"
-    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-    Write-Output "Error Message: $($_.Exception.Message)"
-    Write-Output "Error Details: $($_ | Out-String)"
+catch {
+    Write-Debug "✗ Could not download from direct URL"
+    Write-Error "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Error "Error Message: $($_.Exception.Message)"
+    Write-Error "Error Details: $($_ | Out-String)"
     
     # Fallback: Try to find the CSV link from the documentation page
-    Try {
-        Write-Output "DEBUG: Attempting fallback method - fetching documentation page"
-        Write-Output "DEBUG: Current time: $(Get-Date -Format 'o')"
+    try {
+    Write-Debug "DEBUG: Attempting fallback method - fetching documentation page"
+    Write-Debug "DEBUG: Current time: $(Get-Date -Format 'o')"
         $LicensingPageUrl = "https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference"
         
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        Write-Output "DEBUG: Invoking Invoke-WebRequest for documentation page..."
-        $LicensingPageRequest = Invoke-WebRequest -Uri $LicensingPageUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
-        $sw.Stop()
-        Write-Output "DEBUG: Documentation page downloaded in $($sw.ElapsedMilliseconds)ms"
+        Write-Debug "DEBUG: Invoking Invoke-WebRequest for documentation page..."
+    $licensingPageRequest = Invoke-WebRequest -Uri $LicensingPageUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+    $sw.Stop()
+    Write-Debug "DEBUG: Documentation page downloaded in $($sw.ElapsedMilliseconds)ms"
         
-        Write-Output "DEBUG: Searching for CSV link in page..."
-        $DownloadLink = ($LicensingPageRequest.Links | Where-Object { $_.href -like '*.csv' }).href
-        Write-Output "DEBUG: Found $(@($DownloadLink).Count) CSV links"
+        Write-Debug "DEBUG: Searching for CSV link in page..."
+        $downloadLink = ($licensingPageRequest.Links | Where-Object { $_.href -like '*.csv' }).href
+        Write-Debug "DEBUG: Found $(@($downloadLink).Count) CSV links"
         
-        If ($DownloadLink) {
+        if ($downloadLink) {
             # Make sure the link is absolute
-            If ($DownloadLink -notlike "http*") {
-                $DownloadLink = "https://learn.microsoft.com$DownloadLink"
+            if ($downloadLink -notlike "http*") {
+                $downloadLink = "https://learn.microsoft.com$downloadLink"
             }
             
-            Write-Output "DEBUG: CSV link found: $DownloadLink"
-            Write-Output "DEBUG: Downloading CSV from link..."
+            Write-Debug "DEBUG: CSV link found: $downloadLink"
+            Write-Debug "DEBUG: Downloading CSV from link..."
             $sw.Restart()
-            $ProductInfoRequest = Invoke-WebRequest -Uri $DownloadLink -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+            $productInfoRequest = Invoke-WebRequest -Uri $downloadLink -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
             $sw.Stop()
-            Write-Output "DEBUG: Downloaded in $($sw.ElapsedMilliseconds)ms"
+            Write-Debug "DEBUG: Downloaded in $($sw.ElapsedMilliseconds)ms"
             
-            Write-Output "DEBUG: Parsing CSV using streaming parser..."
+            Write-Debug "DEBUG: Parsing CSV using streaming parser..."
             $sw.Restart()
             
             # Use streaming parser instead of ConvertFrom-Csv for large files
-            $csvContent = $ProductInfoRequest.Content
+            $csvContent = $productInfoRequest.Content
             $lines = $csvContent -split "`n" | Where-Object { $_.Trim().Length -gt 0 }
             
             # Find the header line (skip empty lines and find first line with reasonable column count)
             $headerLineIndex = 0
-            $headerLine = $null
             $headers = @()
             for ($h = 0; $h -lt [Math]::Min(10, $lines.Count); $h++) {
                 $testHeaders = $lines[$h] -split ',' | ForEach-Object { $_.Trim('"').Trim() }
                 if ($testHeaders.Count -ge 3) {  # Real header should have at least 3 columns
-                    $headerLine = $lines[$h]
                     $headers = $testHeaders
                     $headerLineIndex = $h
                     break
@@ -361,12 +379,12 @@ Catch {
                 throw "Could not find valid CSV header (need at least 3 columns)"
             }
             
-            Write-Output "DEBUG: Found $($lines.Count) lines, $(($headers).Count) columns"
+            Write-Debug "DEBUG: Found $($lines.Count) lines, $(($headers).Count) columns"
             
-            $ProductData = @()
+            $productData = @()
             for ($i = $headerLineIndex + 1; $i -lt $lines.Count; $i++) {
                 if (($i % 500) -eq 0) {
-                    Write-Output "DEBUG: Parsed $i rows so far..."
+                    Write-Debug "DEBUG: Parsed $i rows so far..."
                 }
                 $line = $lines[$i]
                 if ($line.Trim().Length -eq 0) { continue }
@@ -393,155 +411,156 @@ Catch {
                 for ($k = 0; $k -lt $headers.Count; $k++) {
                     $obj | Add-Member -NotePropertyName $headers[$k] -NotePropertyValue $values[$k]
                 }
-                $ProductData += $obj
+                $productData += $obj
             }
             
             $sw.Stop()
-            Write-Output "DEBUG: CSV parsed in $($sw.ElapsedMilliseconds)ms, row count: $($ProductData.Count)"
+            Write-Debug "DEBUG: CSV parsed in $($sw.ElapsedMilliseconds)ms, row count: $($productData.Count)"
             
-            Write-Output "DEBUG: Exporting to cache..."
-            $ProductData | Export-Csv -Path $ProductNamesFile -NoTypeInformation -Encoding UTF8
-            Write-Output "✓ Product names downloaded and cached successfully"
-            $ProductDataAvailable = $true
+            Write-Debug "DEBUG: Exporting to cache..."
+            $productData | Export-Csv -Path $productNamesFile -NoTypeInformation -Encoding UTF8
+            Write-Debug "✓ Product names downloaded and cached successfully"
+            $productDataAvailable = $true
         }
-        Else {
-            Write-Output "✗ No CSV download link found on documentation page"
+        else {
+            Write-Debug "✗ No CSV download link found on documentation page"
             Throw "Could not find CSV download link on licensing page"
         }
     }
-    Catch {
-        Write-Output "✗ Could not download from documentation page"
-        Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-        Write-Output "Error Message: $($_.Exception.Message)"
+    catch {
+    Write-Debug "✗ Could not download from documentation page"
+    Write-Error "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Error "Error Message: $($_.Exception.Message)"
         
         # Final fallback: Try to use cached version
-        If (Test-Path -Path $ProductNamesFile) {
-            Write-Output "DEBUG: Cache file exists at: $ProductNamesFile"
-            Write-Output "DEBUG: Attempting to load cached product names..."
-            Try {
+        if (Test-Path -Path $productNamesFile) {
+            Write-Debug "DEBUG: Cache file exists at: $productNamesFile"
+            Write-Debug "DEBUG: Attempting to load cached product names..."
+            try {
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $ProductData = Import-Csv -Path $ProductNamesFile
+                $productData = Import-Csv -Path $productNamesFile
                 $sw.Stop()
-                Write-Output "DEBUG: Cache loaded in $($sw.ElapsedMilliseconds)ms"
-                $rowCount = ($ProductData | Measure-Object).Count
-                Write-Output "✓ Loaded $rowCount products from cache"
-                $ProductDataAvailable = $true
+                Write-Debug "DEBUG: Cache loaded in $($sw.ElapsedMilliseconds)ms"
+                $rowCount = ($productData | Measure-Object).Count
+                Write-Debug "✓ Loaded $rowCount products from cache"
+                $productDataAvailable = $true
             }
-            Catch {
-                Write-Output "✗ Could not load cached file"
-                Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-                Write-Output "Error Message: $($_.Exception.Message)"
+            catch {
+                Write-Debug "✗ Could not load cached file"
+                Write-Error "Error Type: $($_.Exception.GetType().FullName)"
+                Write-Error "Error Message: $($_.Exception.Message)"
             }
         }
-        Else {
-            Write-Output "DEBUG: No cache file found at: $ProductNamesFile"
+        else {
+            Write-Debug "DEBUG: No cache file found at: $productNamesFile"
         }
     }
 }
 
-Write-Output "DEBUG: ProductDataAvailable = $ProductDataAvailable"
-If (-not $ProductDataAvailable) {
-    Write-Output "✓ Fallback: Using built-in license name mappings"
+Write-Debug "DEBUG: productDataAvailable = $productDataAvailable"
+if (-not $productDataAvailable) {
+    Write-Debug "✓ Fallback: Using built-in license name mappings"
 }
 
-If ($ProductDataAvailable) {
+if ($productDataAvailable) {
     # If the product data file is available, use it to populate some hash tables to use to resolve SKU and service plan names
-    [array]$ProductInfo = $ProductData | Sort-Object GUID -Unique
+    [array]$productInfo = $productData | Sort-Object GUID -Unique
     # Create Hash table of the SKUs used in the tenant with the product display names from the Microsoft data file
-    $TenantSkuHash = @{}
-    ForEach ($P in $SKUs) { 
-        $ProductDisplayName = $ProductInfo | Where-Object { $_.GUID -eq $P.SkuId } | `
+    $tenantSkuHash = @{}
+    ForEach ($P in $skus) { 
+        $productDisplayName = $productInfo | Where-Object { $_.GUID -eq $P.SkuId } | `
             Select-Object -ExpandProperty Product_Display_Name
-        If ($Null -eq $ProductDisplayName) {
+        if ($Null -eq $productDisplayName) {
             # Try built-in names if Microsoft data doesn't have it
-            If ($BuiltInSkuNames.ContainsKey($P.SkuId)) {
-                $ProductDisplayName = $BuiltInSkuNames[$P.SkuId]
+            if ($BuiltInSkuNames.ContainsKey($P.SkuId)) {
+                $productDisplayName = $BuiltInSkuNames[$P.SkuId]
             }
-            Else {
-                $ProductDisplayname = $P.SkuPartNumber
+            else {
+                $productDisplayname = $P.SkuPartNumber
             }
         }
-        $TenantSkuHash.Add([string]$P.SkuId, [string]$ProductDisplayName) 
+        $tenantSkuHash.Add([string]$P.SkuId, [string]$productDisplayName) 
     }
     # Extract service plan information and build a hash table
-    [array]$ServicePlanData = $ProductData | Select-Object Service_Plan_Id, Service_Plan_Name, Service_Plans_Included_Friendly_Names | `
+    [array]$servicePlanData = $productData | Select-Object Service_Plan_Id, Service_Plan_Name, Service_Plans_Included_Friendly_Names | `
         Sort-Object Service_Plan_Id -Unique
-    $ServicePlanHash = @{}
-    ForEach ($SP in $ServicePlanData) { 
-        $ServicePlanHash.Add([string]$SP.Service_Plan_Id, [string]$SP.Service_Plans_Included_Friendly_Names)
+    $servicePlanHash = @{}
+    ForEach ($SP in $servicePlanData) { 
+        $servicePlanHash.Add([string]$SP.Service_Plan_Id, [string]$SP.Service_Plans_Included_Friendly_Names)
     }
 }
-Else {
+else {
     # If Microsoft data is not available, use built-in names
     Write-Host "Using built-in license name mappings..."
-    $TenantSkuHash = @{}
-    ForEach ($P in $SKUs) {
-        If ($BuiltInSkuNames.ContainsKey($P.SkuId)) {
-            $ProductDisplayName = $BuiltInSkuNames[$P.SkuId]
+    $tenantSkuHash = @{}
+    ForEach ($P in $skus) {
+        if ($BuiltInSkuNames.ContainsKey($P.SkuId)) {
+            $productDisplayName = $BuiltInSkuNames[$P.SkuId]
         }
-        Else {
-            $ProductDisplayName = $P.SkuPartNumber
+        else {
+            $productDisplayName = $P.SkuPartNumber
         }
-        $TenantSkuHash.Add([string]$P.SkuId, [string]$ProductDisplayName)
+        $tenantSkuHash.Add([string]$P.SkuId, [string]$productDisplayName)
     }
 }
 
 # Generate a report about the subscriptions used in the tenant
-Write-Host "Generating product subscription information..."
-$SkuReport = [System.Collections.Generic.List[Object]]::new()
-ForEach ($Sku in $Skus) {
-    $AvailableUnits = ($Sku.PrepaidUnits.Enabled - $Sku.ConsumedUnits)
+    Write-Host "Generating product subscription information..."
+    $skuReport = [System.Collections.Generic.List[Object]]::new()
+ForEach ($sku in $skus) {
+    $availableUnits = ($sku.PrepaidUnits.Enabled - $sku.ConsumedUnits)
     
     # Get friendly name from hash table, or built-in names, or fall back to SKU part number
-    If ($TenantSkuHash -and $TenantSkuHash.ContainsKey($Sku.SkuId)) {
-        $SkuDisplayName = $TenantSkuHash[$Sku.SkuId]
+    if ($tenantSkuHash -and $tenantSkuHash.ContainsKey($sku.SkuId)) {
+        $skuDisplayName = $tenantSkuHash[$sku.SkuId]
     }
-    ElseIf ($BuiltInSkuNames.ContainsKey($Sku.SkuId)) {
-        $SkuDisplayName = $BuiltInSkuNames[$Sku.SkuId]
+    elseif ($BuiltInSkuNames.ContainsKey($sku.SkuId)) {
+        $skuDisplayName = $BuiltInSkuNames[$sku.SkuId]
     }
-    Else {
-        $SkuDisplayName = $Sku.SkuPartNumber
+    else {
+        $skuDisplayName = $sku.SkuPartNumber
     }
     
-    $DataLine = [PSCustomObject][Ordered]@{
-        'License Name'    = $SkuDisplayName
-        'SKU Part Number' = $Sku.SkuPartNumber
-        'SkuId'           = $Sku.SkuId
-        'Active'          = $Sku.PrepaidUnits.Enabled
-        'Warning'         = $Sku.PrepaidUnits.Warning
-        'In Use'          = $Sku.ConsumedUnits
-        'Available'       = $AvailableUnits        
+    $dataLine = [PSCustomObject][Ordered]@{
+        'License Name'    = $skuDisplayName
+        'SKU Part Number' = $sku.SkuPartNumber
+        'SkuId'           = $sku.SkuId
+        'Active'          = $sku.PrepaidUnits.Enabled
+        'Warning'         = $sku.PrepaidUnits.Warning
+        'In Use'          = $sku.ConsumedUnits
+        'Available'       = $availableUnits        
     }
-    $SkuReport.Add($Dataline)
+    $skuReport.Add($dataLine)
 }
 
 # Export CSV so monthly attachments include the data
-Try {
-    $SkuReport | Select-Object 'License Name', 'SKU Part Number', 'SkuId', 'Active', 'Warning', 'In Use', 'Available' | Export-Csv -Path $CSVOutputFile -NoTypeInformation -Encoding UTF8 -Force
-    Write-Host "CSV report exported to: $CSVOutputFile"
+try {
+    $skuReport | Select-Object 'License Name', 'SKU Part Number', 'SkuId', 'Active', 'Warning', 'In Use', 'Available' | Export-Csv -Path $csvOutputFile -NoTypeInformation -Encoding UTF8 -Force
+    Write-Host "CSV report exported to: $csvOutputFile"
 }
-Catch {
+catch {
     Write-Warning "Failed to export CSV report: $($_.Exception.Message)"
 }
 
 Write-Host "Generating report..."
-Write-Output "========================================"
-Write-Output "RETRIEVING ORGANIZATION INFO:"
-Write-Output "========================================"
-Write-Output "DEBUG: Calling Get-MgOrganization (requires Organization.Read.All application permission)"
+    Write-Debug "========================================"
+    Write-Debug "RETRIEVING ORGANIZATION INFO:"
+    Write-Debug "========================================"
+    Write-Debug "DEBUG: Calling Get-MgOrganization (requires Organization.Read.All application permission)"
+$orgName = "Unknown Organization"
 try {
-    $OrgName = (Get-MgOrganization -ErrorAction Stop).DisplayName
-    Write-Output "✓ Successfully retrieved organization: $OrgName"
+    $orgName = (Get-MgOrganization -ErrorAction Stop).DisplayName
+    Write-Debug "✓ Successfully retrieved organization: $orgName"
 } catch {
-    Write-Output "✗ FAILED to retrieve organization"
-    Write-Output "Error Type: $($_.Exception.GetType().FullName)"
-    Write-Output "Error Message: $($_.Exception.Message)"
-    Write-Output "Stack Trace: $($_.ScriptStackTrace)"
-    Write-Output "WARNING: This requires 'Organization.Read.All' application permission"
-    Write-Output "Falling back to 'Unknown Organization'"
-    $OrgName = "Unknown Organization"
+    Write-Debug "✗ FAILED to retrieve organization"
+    Write-Error "Error Type: $($_.Exception.GetType().FullName)"
+    Write-Error "Error Message: $($_.Exception.Message)"
+    Write-Debug "Stack Trace: $($_.ScriptStackTrace)"
+    Write-Debug "WARNING: This requires 'Organization.Read.All' application permission"
+    Write-Debug "Falling back to 'Unknown Organization'"
 }
-Write-Output "========================================"
+# Use debug-level output for automation logs
+Write-Debug "========================================"
 # Create the HTML report. First, define the header.
 $HTMLHead = "<html>
 	   <style>
@@ -560,13 +579,13 @@ $HTMLHead = "<html>
 	   <body>
            <div align=center>
            <p><h1>Microsoft 365 Subscriptions and Service Plan Report</h1></p>
-           <p><h2><b>For the " + $Orgname + " tenant</b></h2></p>
-           <p><h3>Generated: " + $RunDate + "</h3></p></div>"
+           <p><h2><b>For the " + $orgName + " tenant</b></h2></p>
+           <p><h3>Generated: " + $runDate + "</h3></p></div>"
 
 # This section highlights subscriptions that have less than 5 remaining licenses.
 
 # First, convert the output SKU Report to HTML and then import it into an XML structure
-$HTMLTable = $SkuReport | ConvertTo-Html -Fragment
+$HTMLTable = $skuReport | ConvertTo-Html -Fragment
 [xml]$XML = $HTMLTable
 # Create an attribute class to use, name it, and append to the XML table attributes
 $TableClass = $XML.CreateAttribute("class")
@@ -577,11 +596,11 @@ ForEach ($TableRow in $XML.table.SelectNodes("tr")) {
     # each TR becomes a member of class "tablerow"
     $TableRow.SetAttribute("class", "tablerow")
     ## If row has TD and TD[5] is 5 or less
-    If (($TableRow.td) -and ([int]$TableRow.td[5] -le 5)) {
+    if (($TableRow.td) -and ([int]$TableRow.td[5] -le 5)) {
         ## tag the TD with either the color for "warn" or "pass" defined in the heading
         $TableRow.SelectNodes("td")[5].SetAttribute("class", "warn")
     }
-    ElseIf (($TableRow.td) -and ([int]$TableRow.td[5] -gt 5)) {
+    elseif (($TableRow.td) -and ([int]$TableRow.td[5] -gt 5)) {
         $TableRow.SelectNodes("td")[5].SetAttribute("class", "pass")
     }
 }
@@ -593,40 +612,42 @@ $HTMLBody = [string]::Format('<div class="tablediv">{0}</div>', $XML.OuterXml)
 # End stuff to output
 $HTMLtail = "</body></html>"
 $HTMLReport = $HTMLHead + $HTMLBody + $HTMLtail
-$HTMLReport | Out-File $ReportFile  -Encoding UTF8
+$HTMLReport | Out-File $reportFile  -Encoding UTF8
 
-Write-Host "All done. Output files are" $CSVOutputFile "and" $ReportFile
+Write-Host "All done. Output files are" $csvOutputFile "and" $reportFile
+
+# --- Check monitored SKUs for low license counts ---
 
 # --- Check monitored SKUs for low license counts ---
 
 $lowLicenseAlerts = @()
 # Normalize monitored SKU IDs: trim whitespace and remove empty entries
-$monitoredSkuIds = @($MonitorSkuId1, $MonitorSkuId2, $MonitorSkuId3, $MonitorSkuId4, $MonitorSkuId5) |
+$monitoredSkuIds = @($monitorSkuId1, $monitorSkuId2, $monitorSkuId3, $monitorSkuId4, $monitorSkuId5) |
 ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } |
 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
 if ($monitoredSkuIds.Count -gt 0) {
-    Write-Output "========================================"
-    Write-Output "LICENSE MONITORING:"
-    Write-Output "========================================"
-    Write-Output "Checking $($monitoredSkuIds.Count) monitored SKU(s) for licenses below threshold of $MinimumLicenseThreshold"
+    Write-Debug "========================================"
+    Write-Debug "LICENSE MONITORING:"
+    Write-Debug "========================================"
+    Write-Debug "Checking $($monitoredSkuIds.Count) monitored SKU(s) for licenses below threshold of $minimumLicenseThreshold"
     
     foreach ($skuId in $monitoredSkuIds) {
         $normalizedSkuId = $skuId.ToString().Trim()
         # Try to match by SkuId (GUID) or SkuPartNumber (friendly code), case-insensitive
-        $sku = $Skus | Where-Object {
+        $sku = $skus | Where-Object {
             (($_.SkuId -ne $null) -and ([string]$_.SkuId).Trim().ToLower() -eq $normalizedSkuId.ToLower()) -or
             (($_.SkuPartNumber -ne $null) -and ([string]$_.SkuPartNumber).Trim().ToLower() -eq $normalizedSkuId.ToLower())
         } | Select-Object -First 1
         if ($sku) {
             if ($normalizedSkuId.ToLower() -eq ([string]$sku.SkuPartNumber).Trim().ToLower()) {
-                Write-Output "  Matched monitored SKU by part number: $normalizedSkuId -> SkuId: $($sku.SkuId)"
+                Write-Debug "  Matched monitored SKU by part number: $normalizedSkuId -> SkuId: $($sku.SkuId)"
             }
             $availableUnits = ($sku.PrepaidUnits.Enabled - $sku.ConsumedUnits)
             
             # Get friendly name
-            if ($TenantSkuHash -and $TenantSkuHash.ContainsKey($sku.SkuId)) {
-                $skuDisplayName = $TenantSkuHash[$sku.SkuId]
+            if ($tenantSkuHash -and $tenantSkuHash.ContainsKey($sku.SkuId)) {
+                $skuDisplayName = $tenantSkuHash[$sku.SkuId]
             }
             elseif ($BuiltInSkuNames.ContainsKey($sku.SkuId)) {
                 $skuDisplayName = $BuiltInSkuNames[$sku.SkuId]
@@ -635,42 +656,42 @@ if ($monitoredSkuIds.Count -gt 0) {
                 $skuDisplayName = $sku.SkuPartNumber
             }
             
-            Write-Output "  SKU: $skuDisplayName (ID: $skuId) - Available: $availableUnits"
+            Write-Debug "  SKU: $skuDisplayName (ID: $skuId) - Available: $availableUnits"
             
-            if ($availableUnits -lt $MinimumLicenseThreshold) {
-                $alertMessage = "WARNING: '$skuDisplayName' has only $availableUnits licenses available (threshold: $MinimumLicenseThreshold)"
-                Write-Output "  $alertMessage"
+            if ($availableUnits -lt $minimumLicenseThreshold) {
+                $alertMessage = "WARNING: '$skuDisplayName' has only $availableUnits licenses available (threshold: $minimumLicenseThreshold)"
+                Write-Debug "  $alertMessage"
                 $lowLicenseAlerts += [PSCustomObject]@{
                     LicenseName       = $skuDisplayName
                     SkuId             = $sku.SkuId
                     AvailableLicenses = $availableUnits
-                    Threshold         = $MinimumLicenseThreshold
+                    Threshold         = $minimumLicenseThreshold
                 }
             }
         }
         else {
-            Write-Output "  SKU ID $skuId not found in tenant"
+            Write-Debug "  SKU ID $skuId not found in tenant"
         }
     }
-    Write-Output "========================================"
+    Write-Debug "========================================"
 }
 
 # --- SendGrid Email Sending ---
 $currentDate = Get-Date
 $isFirstDayOfMonth = $currentDate.Day -eq 1
 
-Write-Output "========================================"
-Write-Output "EMAIL SCHEDULE CHECK:"
-Write-Output "========================================"
-Write-Output "Current Date: $($currentDate.ToString('yyyy-MM-dd'))"
-Write-Output "Is First Day of Month: $isFirstDayOfMonth"
-Write-Output "========================================"
+Write-Debug "========================================"
+Write-Debug "EMAIL SCHEDULE CHECK:"
+Write-Debug "========================================"
+Write-Debug "Current Date: $($currentDate.ToString('yyyy-MM-dd'))"
+Write-Debug "Is First Day of Month: $isFirstDayOfMonth"
+Write-Debug "========================================"
 
 $attachments = @()
 
 # Only attach full reports on first day of month
 if ($isFirstDayOfMonth) {
-    $filesToAttach = @($CSVOutputFile, $ReportFile)
+    $filesToAttach = @($csvOutputFile, $reportFile)
     foreach ($f in $filesToAttach) {
         if (Test-Path $f) {
             $ext = [IO.Path]::GetExtension($f).ToLower()
@@ -686,13 +707,13 @@ if ($isFirstDayOfMonth) {
             $attachments += @{ content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); filename = [IO.Path]::GetFileName($f); type = $mimeType; disposition = "attachment" }
         }
         else {
-            Write-Output "Attachment missing, skipping: $f"
+            Write-Debug "Attachment missing, skipping: $f"
         }
     }
 }
 
 # Build recipients array - ensure it's always an array even with single recipient
-$toRecipients = @($ToEmail.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { @{ email = $_ } })
+$toRecipients = @($toEmail.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { @{ email = $_ } })
 
 $emailSubject = ""
 $emailContent = ""
@@ -714,34 +735,34 @@ if ($lowLicenseAlerts.Count -gt 0) {
     else {
         $emailContent = "WARNING: One or more monitored licenses are below the threshold!$alertText`nFull reports are sent on the 1st of each month."
     }
-    Write-Output "Low license alerts detected - email will be sent"
+    Write-Debug "Low license alerts detected - email will be sent"
 }
 elseif ($isFirstDayOfMonth) {
     # Send full monthly report on 1st of month even if no alerts
     $shouldSendEmail = $true
     $emailSubject = "M365 License Report - Monthly Full Report"
     $emailContent = "This is your monthly M365 license report. See attached CSV and HTML reports for full details."
-    Write-Output "First day of month - monthly full report will be sent"
+    Write-Debug "First day of month - monthly full report will be sent"
 }
 else {
     # No alerts and not 1st of month - skip sending email
     $shouldSendEmail = $false
-    Write-Output "No license alerts and not first day of month - email will be skipped"
+    Write-Debug "No license alerts and not first day of month - email will be skipped"
 }
 
-Write-Output "========================================"
-Write-Output "EMAIL SENDING DEBUG INFORMATION:"
-Write-Output "========================================"
-Write-Output "SendGrid API Key present: $(if ($SendGridApiKey) { 'YES (length: ' + $SendGridApiKey.Length + ')' } else { 'NO' })"
-Write-Output "From Email: $FromEmail"
-Write-Output "To Email: $ToEmail"
-Write-Output "Subject: $emailSubject"
-Write-Output "Number of attachments: $($attachments.Count)"
-Write-Output "Attachment files:"
+Write-Debug "========================================"
+Write-Debug "EMAIL SENDING DEBUG INFORMATION:"
+Write-Debug "========================================"
+Write-Debug "SendGrid API Key present: $(if ($sendGridApiKey) { 'YES (length: ' + $sendGridApiKey.Length + ')' } else { 'NO' })"
+Write-Debug "From Email: $fromEmail"
+Write-Debug "To Email: $toEmail"
+Write-Debug "Subject: $emailSubject"
+Write-Debug "Number of attachments: $($attachments.Count)"
+Write-Debug "Attachment files:"
 foreach ($att in $attachments) {
-    Write-Output "  - $($att.filename) (size: $($att.content.Length) base64 chars)"
+    Write-Debug "  - $($att.filename) (size: $($att.content.Length) base64 chars)"
 }
-Write-Output "========================================"
+Write-Debug "========================================"
 
 # Build the SendGrid email body with proper array formatting
 # NOTE: Only include attachments field if there are actual attachments (SendGrid fails on empty array)
@@ -751,7 +772,7 @@ $emailBodyObj = @{
             to = @($toRecipients)
         }
     )
-    from             = @{ email = $FromEmail }
+    from             = @{ email = $fromEmail }
     subject          = $emailSubject
     content          = @(@{ type = "text/plain"; value = $emailContent })
 }
@@ -764,34 +785,34 @@ if ($attachments.Count -gt 0) {
 $emailBody = $emailBodyObj | ConvertTo-Json -Depth 6
 
 if ($shouldSendEmail) {
-    if ($SendGridApiKey) {
-        Write-Output "Attempting to send email via SendGrid..."
+    if ($sendGridApiKey) {
+    Write-Debug "Attempting to send email via SendGrid..."
         try {
             $response = Invoke-RestMethod -Uri "https://api.sendgrid.com/v3/mail/send" `
                 -Method Post `
-                -Headers @{ "Authorization" = "Bearer $SendGridApiKey"; "Content-Type" = "application/json" } `
+                -Headers @{ "Authorization" = "Bearer $sendGridApiKey"; "Content-Type" = "application/json" } `
                 -Body $emailBody
-            Write-Output "SendGrid API Response: $($response | ConvertTo-Json -Compress)"
-            Write-Output "✓ License report email sent successfully to $ToEmail."
+            Write-Debug "SendGrid API Response: $($response | ConvertTo-Json -Compress)"
+            Write-Debug "✓ License report email sent successfully to $toEmail."
         }
         catch {
-            Write-Output "✗ Failed to send license report email via SendGrid"
-            Write-Output "Error Message: $($_.Exception.Message)"
+            Write-Debug "✗ Failed to send license report email via SendGrid"
+            Write-Error "Error Message: $($_.Exception.Message)"
             if ($_.Exception.Response) {
                 $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
                 $reader.BaseStream.Position = 0
                 $reader.DiscardBufferedData()
                 $responseBody = $reader.ReadToEnd()
-                Write-Output "SendGrid Response Body: $responseBody"
+                Write-Debug "SendGrid Response Body: $responseBody"
             }
         }
     }
     else {
-        Write-Output "✗ SendGrid API Key not available. Cannot send license report email."
-        Write-Output "Please check KeyVault configuration: KeyVaultName='$KeyVaultName', SecretName='$SendGridSecretName'"
+    Write-Debug "✗ SendGrid API Key not available. Cannot send license report email."
+    Write-Debug "Please check KeyVault configuration: KeyVaultName='$keyVaultName', SecretName='$sendGridSecretName'"
     }
 }
 else {
-    Write-Output "Email sending skipped - no alerts and not first day of month"
+    Write-Debug "Email sending skipped - no alerts and not first day of month"
 }
-Write-Output "========================================"
+Write-Debug "========================================"
