@@ -1,10 +1,12 @@
 # devops-runbooks
 
-This repository contains a collection of PowerShell runbooks for various DevOps tasks.
+This repository contains a collection of PowerShell runbooks for various DevOps tasks.  
 
 ## Runbooks
 
 The runbook files are stored in the [runbooks](runbooks/) folder.
+
+**Note.** PowerShell 7.2 is currently the supported version.
 
 ## Contributing
 
