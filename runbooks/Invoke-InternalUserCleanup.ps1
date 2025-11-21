@@ -450,21 +450,10 @@ An optional array of attachment objects. Each object must include:
 
 
 # Get all exclusion group members' UPNs
-$exclusion = [System.Collections.ArrayList]@()
+$exclusion = [System.Collections.Generic.List[string]]::new()
 Write-Information "Processing exclusion group with ID: $groupId" -InformationAction Continue
 Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
 Write-Information "Exclusion list populated with $($exclusion.Count) users" -InformationAction Continue
-if ($exclusion.Count -gt 0) {
-    # Show only the first 10 exclusion UPNs
-    $previewCount = [Math]::Min(10, $exclusion.Count)
-    $preview = $exclusion[0..($previewCount - 1)] -join ', '
-    if ($exclusion.Count -le 10) {
-        Write-Verbose "Exclusion list (all $($exclusion.Count) users): $preview"
-    }
-    else {
-        Write-Verbose "Exclusion list (showing first 10 of $($exclusion.Count) users): $preview"
-    }
-}
 
 # Gather all users in tenant (only users with employeeID defined)
 Write-Information "Retrieving all users from Microsoft Graph (Beta)..." -InformationAction Continue
