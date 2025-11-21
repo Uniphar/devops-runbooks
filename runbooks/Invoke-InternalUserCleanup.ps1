@@ -515,7 +515,7 @@ Foreach ($user in $allUsers) {
     Write-Debug "Gathering sign-in information for $($user.DisplayName)"
 
 
-    # Count the last signing date from all posible variants
+    # Count the last signing date from all possible variants
     # Retrieve the date values
     $lastInteractiveSignIn = $user.SignInActivity.LastSignInDateTime
     $lastNonInteractiveSignIn = $user.SignInActivity.LastNonInteractiveSignInDateTime
