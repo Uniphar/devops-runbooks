@@ -707,7 +707,7 @@ $disableReport = @()
 
 # Iterate over the report and disable users
 foreach ($user in $report) {
-    if (-not $Testing) {
+    if (-not $testing) {
         $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName
         $azureResult = Disable-MgUser -userId $user.UserPrincipalName
     }
