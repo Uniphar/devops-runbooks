@@ -833,7 +833,7 @@ NEXT STEPS:
 - Review the attached reports for accuracy
 - Contact users or their managers if you have questions about specific accounts
 - Users can request account reactivation through the IT Service Portal
-- if you are sure users no longer need their accounts, please proceed with full deprovisioning process and license removal.
+- If you are sure users no longer need their accounts, please proceed with full deprovisioning process and license removal.
 
 Please review the attached reports and take any necessary follow-up actions.
 "@
