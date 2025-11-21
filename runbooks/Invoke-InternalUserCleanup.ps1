@@ -497,7 +497,6 @@ $activeUPNs = $activeUsers | Select-Object -ExpandProperty UserPrincipalName
 $activeUPNs2 = $activeUsers2 | Select-Object -ExpandProperty UserPrincipalName
 
 # Create a new empty array list object for disabling
-# Create a new empty array list object for disabling
 $report = [System.Collections.Generic.List[Object]]::new()
 # Create a new empty array list object for notification
 $notification = [System.Collections.Generic.List[Object]]::new()
