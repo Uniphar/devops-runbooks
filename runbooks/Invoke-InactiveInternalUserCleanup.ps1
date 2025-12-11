@@ -96,7 +96,7 @@ try {
     Import-Module Microsoft.Graph.Beta.Identity.DirectoryManagement -ErrorAction Stop
     Import-Module Microsoft.Graph.Groups -ErrorAction Stop
     
-    Write-Information "All required modules imported successfully" -InformationAction Continue
+    Write-Output "All required modules imported successfully"
 }
 catch {
     Write-Error "Failed to import required modules: $_"
@@ -104,10 +104,10 @@ catch {
 }
 
 Connect-AzAccount -Identity -ErrorAction Stop
-Write-Information "Successfully connected to Azure using managed identity" -InformationAction Continue
+Write-Output "Successfully connected to Azure using managed identity"
 
 Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop
-Write-Information "Successfully connected to Microsoft Graph using managed identity" -InformationAction Continue
+Write-Output "Successfully connected to Microsoft Graph using managed identity"
 
 # Normalize administrative recipient input so Azure Automation single-value bindings do not break array expectations.
 if ($null -eq $sendGridRecipientEmailAddresses) {
@@ -191,7 +191,7 @@ $daysRemaining = $inactivityTime - $userWarningThreshold
 
 # Calculate the mid-point threshold for second notification
 $midPointThreshold = [math]::Round(($userWarningThreshold + $inactivityTime) / 2)
-Write-Verbose "Calculated thresholds: Warning=$userWarningThreshold, MidPoint=$midPointThreshold, Disable=$inactivityTime"
+Write-Output "Calculated thresholds: Warning=$userWarningThreshold, MidPoint=$midPointThreshold, Disable=$inactivityTime"
 
 # Directory where temporary CSV reports are written (Automation runbook uses $env:TEMP)
 $reportDir = $env:TEMP
@@ -276,15 +276,15 @@ function Get-GroupMembers {
     }
 
     try {
-        Write-Verbose "Retrieving members for group ID: $groupId"
+        Write-Output "Retrieving members for group ID: $groupId"
         
         # Try to get the group first to validate it exists
         $group = Get-MgGroup -GroupId $groupId -ErrorAction Stop
-        Write-Verbose "Found group: $($group.DisplayName)"
+        Write-Output "Found group: $($group.DisplayName)"
         
         # Get group members using the correct cmdlet
         $members = Get-MgGroupMember -GroupId $groupId -All -ErrorAction Stop
-        Write-Verbose "Retrieved $($members.Count) members from group: $($group.DisplayName)"
+        Write-Output "Retrieved $($members.Count) members from group"
 
         foreach ($member in $members) {
             $memberType = $member.AdditionalProperties.'@odata.type'
@@ -312,6 +312,7 @@ function Get-GroupMembers {
 
                 if ($userPrincipalName) {
                     [void]$exclusion.Value.Add($userPrincipalName)
+                    # Remove individual user output - will be shown in summary
                 }
                 else {
                     Write-Warning "Could not resolve user principal name for member '$($member.Id)'; skipping."
@@ -321,7 +322,7 @@ function Get-GroupMembers {
                 # Get the nested group and recursively process its members
                 $nestedGroup = Get-MgGroup -GroupId $member.Id -ErrorAction SilentlyContinue
                 if ($nestedGroup) {
-                    Write-Verbose "Processing nested group: $($nestedGroup.DisplayName)"
+                    Write-Output "Processing nested group: $($nestedGroup.DisplayName)"
                     Get-GroupMembers -GroupId $nestedGroup.Id -Exclusion $exclusion
                 }
             }
@@ -418,6 +419,11 @@ An optional array of attachment objects. Each object must include:
         $attachmentObjects = if ($attachments) {
             $attachments | ForEach-Object {
                 $contentCsv = Get-Content $_.file -Raw
+                
+                # Ensure content is not null or empty
+                if ([string]::IsNullOrEmpty($contentCsv)) {
+                    $contentCsv = " "  # Use a single space as minimum content
+                }
 
                 @{
                     content     = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($contentCsv))
@@ -450,15 +456,26 @@ An optional array of attachment objects. Each object must include:
 
 
 # Get all exclusion group members' UPNs
-$exclusion = [System.Collections.Generic.List[string]]::new()
-Write-Information "Processing exclusion group with ID: $groupId" -InformationAction Continue
+$exclusion = [System.Collections.ArrayList]@()
+Write-Output "Processing exclusion group with ID: $groupId"
 Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
-Write-Information "Exclusion list populated with $($exclusion.Count) users" -InformationAction Continue
+Write-Output "Exclusion list populated with $($exclusion.Count) users"
+if ($exclusion.Count -gt 0) {
+    # Show only the first 10 exclusion UPNs
+    $previewCount = [Math]::Min(10, $exclusion.Count)
+    $preview = $exclusion[0..($previewCount - 1)] -join ', '
+    if ($exclusion.Count -le 10) {
+        Write-Output "Exclusion list (all $($exclusion.Count) users): $preview"
+    }
+    else {
+        Write-Output "Exclusion list (showing first 10 of $($exclusion.Count) users): $preview"
+    }
+}
 
 # Gather all users in tenant (only users with employeeID defined)
-Write-Information "Retrieving all users from Microsoft Graph (Beta)..." -InformationAction Continue
+Write-Output "Retrieving all users from Microsoft Graph (Beta)..."
 $allUsers = Get-MgBetaUser -Property SignInActivity,EmployeeId,AccountEnabled,UserType,DisplayName,UserPrincipalName,Mail,CompanyName,CreatedDateTime,Id -All | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" -and $_.EmployeeId }
-Write-Information "Retrieved $($allUsers.Count) users from Microsoft Graph" -InformationAction Continue
+Write-Output "Retrieved $($allUsers.Count) users from Microsoft Graph"
 
 # Prepare on-prem Active Directory activity lists for two cutoff dates:
 #  - $cutoffDate (for disabling decisions)
@@ -469,11 +486,11 @@ $cutoffDate = (Get-Date).AddDays(-$inactivityTime)
 $cutoffDate2 = (Get-Date).AddDays(-$userWarningThreshold)
 
 # Get list of all UPNs from on-prem AD that were active within the inactivity time
-Write-Information "Connecting to on-premises AD domain controller: $domainController" -InformationAction Continue
+Write-Output "Connecting to on-premises AD domain controller: $domainController"
 try {
     $activeUsers = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { LastLogonDate -ge $cutoffDate } -Properties UserPrincipalName, LastLogonDate -ErrorAction Stop
     $activeUsers2 = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { LastLogonDate -ge $cutoffDate2 } -Properties UserPrincipalName, LastLogonDate -ErrorAction Stop
-    Write-Information "Successfully retrieved on-prem AD user data. Active users (cutoff $cutoffDate): $($activeUsers.Count), Active users (cutoff $cutoffDate2): $($activeUsers2.Count)" -InformationAction Continue
+    Write-Output "Successfully retrieved on-prem AD user data. Active users (cutoff $cutoffDate): $($activeUsers.Count), Active users (cutoff $cutoffDate2): $($activeUsers2.Count)"
 }
 catch {
     Write-Error "Failed to contact on-premises AD domain controller '$domainController'. Error: $_"
@@ -762,14 +779,14 @@ This is an automated notification. Do not reply to this email.
                 -subject $managerEmailSubject `
                 -content $managerEmailContent
             
-            Write-Information "Sent disable notification (3rd) to manager: $($user.ManagerEmail) for user: $($user.DisplayName)" -InformationAction Continue
+            Write-Output "Sent disable notification (3rd) to manager: $($user.ManagerEmail) for user: $($user.DisplayName)"
         }
         else {
             Write-Warning "No manager email for disabled user: $($user.DisplayName). Skipping manager notification."
         }
     }
     else {
-        Write-Verbose "Testing mode: Would send disable notification (3rd) to manager for user $($user.DisplayName)"
+        Write-Output "Testing mode: Would send disable notification (3rd) to manager for user $($user.DisplayName)"
     }
 }
 
@@ -892,10 +909,10 @@ Please note: This is an automated notification. Do not reply to this email.
             -subject $userEmailSubject `
             -content $userEmailContent
         
-        Write-Information "Sent first warning to user and manager: $($user.DisplayName)" -InformationAction Continue
+        Write-Output "Sent first warning to user and manager: $($user.DisplayName)"
     }
     else {
-        Write-Verbose "Testing mode: Skipping first notification email to user $($user.DisplayName) and manager"
+        Write-Output "Testing mode: Skipping first notification email to user $($user.DisplayName) and manager"
     }
 }
 
@@ -949,13 +966,13 @@ This is an automated notification. Do not reply to this email.
                 -subject $managerEmailSubject `
                 -content $managerEmailContent
             
-            Write-Information "Sent second warning (mid-point) to manager: $($user.ManagerEmail) for user: $($user.DisplayName)" -InformationAction Continue
+            Write-Output "Sent second warning (mid-point) to manager: $($user.ManagerEmail) for user: $($user.DisplayName)"
         }
         else {
             Write-Warning "No manager email for user: $($user.DisplayName). Skipping mid-point notification."
         }
     }
     else {
-        Write-Verbose "Testing mode: Would send second notification (mid-point) to manager for user $($user.DisplayName)"
+        Write-Output "Testing mode: Would send second notification (mid-point) to manager for user $($user.DisplayName)"
     }
 }
