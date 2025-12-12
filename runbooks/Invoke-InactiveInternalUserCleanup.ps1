@@ -61,29 +61,29 @@ Requires:
 [CmdletBinding()]
 param (
     [Parameter(Mandatory = $false)]
-    [string] $sendGridApiKeyKvName,
+    [string] $SendGridApiKeyKvName,
     [Parameter(Mandatory = $false)]
-    [string] $sendGridApiKeyKvSecretName,
+    [string] $SendGridApiKeyKvSecretName,
     [Parameter(Mandatory = $false)]
-    [string] $onPremKeyVaultName,
+    [string] $OnPremKeyVaultName,
     [Parameter(Mandatory = $false)]
-    [string] $domainAdminUserSecretName,
+    [string] $DomainAdminUserSecretName,
     [Parameter(Mandatory = $false)]
-    [string] $domainAdminPwdSecretName,
+    [string] $DomainAdminPwdSecretName,
     [Parameter(Mandatory = $true)]
-    [string] $domainControllerName,
+    [string] $DomainControllerName,
     [Parameter(Mandatory = $false)]
-    [string] $sendGridSenderEmailAddress,
+    [string] $SendGridSenderEmailAddress,
     [Parameter(Mandatory = $false)]
-    [object] $sendGridRecipientEmailAddresses,
+    [object] $SendGridRecipientEmailAddresses,
     [Parameter(Mandatory = $false)]
-    [int] $inactivityTime = 45,
+    [int] $InactivityTime = 45,
     [Parameter(Mandatory = $false)]
-    [int] $userWarningThreshold = 35,
+    [int] $UserWarningThreshold = 35,
     [Parameter(Mandatory = $true)]
-    [string] $groupId,
+    [string] $GroupId,
     [Parameter(Mandatory = $false)]
-    [bool] $testing = $true
+    [bool] $Testing = $true
 )
 
 
@@ -110,46 +110,46 @@ Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop
 Write-Output "Successfully connected to Microsoft Graph using managed identity"
 
 # Normalize administrative recipient input so Azure Automation single-value bindings do not break array expectations.
-if ($null -eq $sendGridRecipientEmailAddresses) {
-    $sendGridRecipientEmailAddresses = @()
+if ($null -eq $SendGridRecipientEmailAddresses) {
+    $SendGridRecipientEmailAddresses = @()
 }
-elseif ($sendGridRecipientEmailAddresses -is [System.Collections.IEnumerable] -and $sendGridRecipientEmailAddresses -isnot [string]) {
-    $sendGridRecipientEmailAddresses = @($sendGridRecipientEmailAddresses | ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } | Where-Object { $_ })
+elseif ($SendGridRecipientEmailAddresses -is [System.Collections.IEnumerable] -and $SendGridRecipientEmailAddresses -isnot [string]) {
+    $SendGridRecipientEmailAddresses = @($SendGridRecipientEmailAddresses | ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } | Where-Object { $_ })
 }
 else {
-    $rawRecipients = $sendGridRecipientEmailAddresses.ToString().Trim()
+    $rawRecipients = $SendGridRecipientEmailAddresses.ToString().Trim()
 
     if ($rawRecipients.StartsWith('[') -and $rawRecipients.EndsWith(']')) {
         try {
             $parsedRecipients = $rawRecipients | ConvertFrom-Json -ErrorAction Stop
-            $sendGridRecipientEmailAddresses = @($parsedRecipients | ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } | Where-Object { $_ })
+            $SendGridRecipientEmailAddresses = @($parsedRecipients | ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } | Where-Object { $_ })
         }
         catch {
-            $sendGridRecipientEmailAddresses = @($rawRecipients -split "[,;`r`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $SendGridRecipientEmailAddresses = @($rawRecipients -split "[,;`r`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         }
     }
     else {
-        $sendGridRecipientEmailAddresses = @($rawRecipients -split "[,;`r`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $SendGridRecipientEmailAddresses = @($rawRecipients -split "[,;`r`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     }
 }
 
-$sendGridRecipientEmailAddresses = [string[]]$sendGridRecipientEmailAddresses
+$SendGridRecipientEmailAddresses = [string[]]$SendGridRecipientEmailAddresses
 
 # Determine Key Vault name: the runbook requires the Key Vault name to be supplied via
-# the `-sendGridApiKeyKvName` parameter. The script will error and return if it's not provided.
-if ($sendGridApiKeyKvName) {
-    $vaultName = $sendGridApiKeyKvName
+# the `-SendGridApiKeyKvName` parameter. The script will error and return if it's not provided.
+if ($SendGridApiKeyKvName) {
+    $vaultName = $SendGridApiKeyKvName
 }
 else {
-    Write-Error "Parameter -sendGridApiKeyKvName is required so the runbook can retrieve secrets from Key Vault."
+    Write-Error "Parameter -SendGridApiKeyKvName is required so the runbook can retrieve secrets from Key Vault."
     return
 }
 
 $sendGridApiKey = ''
 
-if ($sendGridApiKeyKvSecretName) {
+if ($SendGridApiKeyKvSecretName) {
     try {
-        $sendGridSecret = Get-AzKeyVaultSecret -VaultName $vaultName -Name $sendGridApiKeyKvSecretName -ErrorAction Stop
+        $sendGridSecret = Get-AzKeyVaultSecret -VaultName $vaultName -Name $SendGridApiKeyKvSecretName -ErrorAction Stop
         if ($sendGridSecret.SecretValueText) {
             $sendGridApiKey = $sendGridSecret.SecretValueText
         }
@@ -158,23 +158,23 @@ if ($sendGridApiKeyKvSecretName) {
         }
     }
     catch {
-        Write-Error "Failed to retrieve SendGrid API key '$sendGridApiKeyKvSecretName' from Key Vault '$vaultName'. $_"
+        Write-Error "Failed to retrieve SendGrid API key '$SendGridApiKeyKvSecretName' from Key Vault '$vaultName'. $_"
         return
     }
 }
-elseif (-not $testing) {
-    Write-Error 'When -testing is set to $false you must supply -sendGridApiKeyKvSecretName so the script can send email notifications.'
+elseif (-not $Testing) {
+    Write-Error 'When -Testing is set to $false you must supply -SendGridApiKeyKvSecretName so the script can send email notifications.'
     return
 }
 # Determine which Key Vault to use for on-prem credentials (prefer explicit parameter)
-$onPremVault = if ($onPremKeyVaultName) { $onPremKeyVaultName } else { $vaultName }
+$onPremVault = if ($OnPremKeyVaultName) { $OnPremKeyVaultName } else { $vaultName }
 
 # Retrieve on-premises AD domain admin username/password from Key Vault (as SecureString)
-$domainUserSecret = Get-AzKeyVaultSecret -VaultName $onPremVault -Name $domainAdminUserSecretName
-$domainPwdSecret = Get-AzKeyVaultSecret -VaultName $onPremVault -Name $domainAdminPwdSecretName
+$domainUserSecret = Get-AzKeyVaultSecret -VaultName $onPremVault -Name $DomainAdminUserSecretName
+$domainPwdSecret = Get-AzKeyVaultSecret -VaultName $onPremVault -Name $DomainAdminPwdSecretName
 
 if (-not $domainUserSecret -or -not $domainPwdSecret) {
-    Write-Error "Could not retrieve on-prem credentials from Key Vault '$onPremVault'. Ensure secrets exist: $domainAdminUserSecretName, $domainAdminPwdSecretName"
+    Write-Error "Could not retrieve on-prem credentials from Key Vault '$onPremVault'. Ensure secrets exist: $DomainAdminUserSecretName, $DomainAdminPwdSecretName"
     return
 }
 
@@ -183,15 +183,15 @@ $domainUser = [Net.NetworkCredential]::new('', $domainUserSecret.SecretValue).Pa
 $domainPasswordSecure = $domainPwdSecret.SecretValue
 $adCredentials = New-Object System.Management.Automation.PSCredential ($domainUser, $domainPasswordSecure)
 
-# Domain controller/server name is supplied via parameter `$domainControllerName`
-$domainController = $domainControllerName
+# Domain controller/server name is supplied via parameter `$DomainControllerName`
+$domainController = $DomainControllerName
 
 # Calculate days remaining before disabling (define early, used in emails)
-$daysRemaining = $inactivityTime - $userWarningThreshold
+$daysRemaining = $InactivityTime - $UserWarningThreshold
 
 # Calculate the mid-point threshold for second notification
-$midPointThreshold = [math]::Round(($userWarningThreshold + $inactivityTime) / 2)
-Write-Output "Calculated thresholds: Warning=$userWarningThreshold, MidPoint=$midPointThreshold, Disable=$inactivityTime"
+$midPointThreshold = [math]::Round(($UserWarningThreshold + $InactivityTime) / 2)
+Write-Output "Calculated thresholds: Warning=$UserWarningThreshold, MidPoint=$midPointThreshold, Disable=$InactivityTime"
 
 # Directory where temporary CSV reports are written (Automation runbook uses $env:TEMP)
 $reportDir = $env:TEMP
@@ -242,8 +242,9 @@ function Disable-OnPremADUser {
         }
     }
     catch {
-        Write-Error "Failed to disable on-prem AD account for user '$userPrincipalName': $_"
-        return "Error: $_"
+        $errorMsg = $_.Exception.Message
+        Write-Error "Failed to disable on-prem AD account for user '$userPrincipalName': $errorMsg"
+        return "Error: $errorMsg"
     }
 }
 
@@ -258,8 +259,9 @@ function Disable-MgUser {
         return "Success"
     }
     catch {
-        Write-Error "Failed to disable Azure AD account for user: $userId"
-        return "Failed"
+        $errorMsg = $_.Exception.Message
+        Write-Error "Failed to disable Azure AD account for user '$userId': $errorMsg"
+        return "Error: $errorMsg"
     }
 }
 
@@ -388,7 +390,7 @@ An optional array of attachment objects. Each object must include:
     )
 
     # Log email details when testing
-    if ($testing) {
+    if ($Testing) {
         $date = Get-Date -Format "yyyy-MM-dd"
         $timestamp = Get-Date -Format "HHmmss"
         $logFile = "$env:TEMP\email_log_${date}_${timestamp}.txt"
@@ -457,8 +459,8 @@ An optional array of attachment objects. Each object must include:
 
 # Get all exclusion group members' UPNs
 $exclusion = [System.Collections.ArrayList]@()
-Write-Output "Processing exclusion group with ID: $groupId"
-Get-GroupMembers -GroupId $groupId -Exclusion ([ref]$exclusion)
+Write-Output "Processing exclusion group with ID: $GroupId"
+Get-GroupMembers -GroupId $GroupId -Exclusion ([ref]$exclusion)
 Write-Output "Exclusion list populated with $($exclusion.Count) users"
 if ($exclusion.Count -gt 0) {
     # Show only the first 10 exclusion UPNs
@@ -482,8 +484,8 @@ Write-Output "Retrieved $($allUsers.Count) users from Microsoft Graph"
 #  - $cutoffDate2 (for warning/notification decisions)
 $activeUPNs = $null
 # Calculate the cutoff date
-$cutoffDate = (Get-Date).AddDays(-$inactivityTime)
-$cutoffDate2 = (Get-Date).AddDays(-$userWarningThreshold)
+$cutoffDate = (Get-Date).AddDays(-$InactivityTime)
+$cutoffDate2 = (Get-Date).AddDays(-$UserWarningThreshold)
 
 # Get list of all UPNs from on-prem AD that were active within the inactivity time
 Write-Output "Connecting to on-premises AD domain controller: $domainController"
@@ -554,7 +556,7 @@ Foreach ($user in $allUsers) {
     }
     $daysSinceCreation = [math]::Round(((Get-Date) - $accountCreationDate).TotalDays)
 
-    if ($daysSinceCreation -gt 21 -and $null -ne $maxDate -and $maxDate -lt (Get-Date).AddDays(-$inactivityTime)) {
+    if ($daysSinceCreation -gt 21 -and $null -ne $maxDate -and $maxDate -lt (Get-Date).AddDays(-$InactivityTime)) {
         # if user inactive and the account is not new, then 
         # Get current user license information
         try {
@@ -604,8 +606,8 @@ Foreach ($user in $allUsers) {
 
 
 
-    #create a report for users to send FIRST warning (at userWarningThreshold - e.g., 35 days)
-    if ($daysInactive -eq $userWarningThreshold) {
+    #create a report for users to send FIRST warning (at UserWarningThreshold - e.g., 35 days)
+    if ($daysInactive -eq $UserWarningThreshold) {
         # if user inactive then 
         
         # Get current user license information
@@ -713,7 +715,7 @@ $disableReport = @()
 
 # Iterate over the report and disable users
 foreach ($user in $report) {
-    if (-not $testing) {
+    if (-not $Testing) {
         $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName
         $azureResult = Disable-MgUser -userId $user.UserPrincipalName
     }
@@ -735,7 +737,7 @@ $disableReport | Export-Csv -Path "$reportDir\DisableReport.csv" -NoTypeInformat
 
 # Send notifications to managers about disabled accounts (THIRD notification)
 foreach ($user in $report) {
-    if (-not $testing) {
+    if (-not $Testing) {
         # Only notify if we have a manager email and the disable was successful
         if ($user.ManagerEmail) {
             $disableStatus = $disableReport | Where-Object { $_.UserPrincipalName -eq $user.UserPrincipalName }
@@ -750,7 +752,7 @@ ACCOUNT DETAILS:
 - User: $($user.DisplayName) ($($user.Email))
 - Last Activity: $($user.LastActivityDate)
 - Disabled Date: $(Get-Date -Format "yyyy-MM-dd")
-- Reason: No sign-in activity for $inactivityTime days
+- Reason: No sign-in activity for $InactivityTime days
 
 DISABLE STATUS:
 - Azure AD: $($disableStatus.AzureResult)
@@ -758,9 +760,9 @@ DISABLE STATUS:
 
 PREVIOUS NOTIFICATIONS:
 This is the third notification regarding this account:
-- First notification was sent at $userWarningThreshold days of inactivity
+- First notification was sent at $UserWarningThreshold days of inactivity
 - Second notification was sent at $midPointThreshold days of inactivity
-- Account has now been disabled after $inactivityTime days of inactivity
+- Account has now been disabled after $InactivityTime days of inactivity
 
 NEXT STEPS:
 If this user is no longer with the organization or no longer needs this account:
@@ -818,7 +820,7 @@ This is an automated report from the Inactive User Management system.
 
 SUMMARY:
 - Total users disabled: $($report.count)
-- Total users notified (first warning - $userWarningThreshold days): $($notification.count)
+- Total users notified (first warning - $UserWarningThreshold days): $($notification.count)
 - Total users notified (second warning - $midPointThreshold days): $($midPointNotification.count)
 
 The attached CSV files contain detailed information about:
@@ -828,12 +830,12 @@ The attached CSV files contain detailed information about:
 4. midpoint_notification_list.csv - Users that received second warning ($midPointThreshold days)
 
 PROCESS OVERVIEW:
-Accounts are disabled after $inactivityTime days of inactivity (no sign-in activity in Microsoft Entra ID or on-premises Active Directory). 
+Accounts are disabled after $InactivityTime days of inactivity (no sign-in activity in Microsoft Entra ID or on-premises Active Directory). 
 
 NOTIFICATION STAGES:
-1. First notification: After $userWarningThreshold days of inactivity ($daysRemaining days until disabling)
+1. First notification: After $UserWarningThreshold days of inactivity ($daysRemaining days until disabling)
 2. Second notification: After $midPointThreshold days of inactivity (reminder to managers)
-3. Third notification: After $inactivityTime days - account disabled (confirmation to managers)
+3. Third notification: After $InactivityTime days - account disabled (confirmation to managers)
 
 NEXT STEPS:
 - Review the attached reports for accuracy
@@ -845,15 +847,15 @@ Please review the attached reports and take any necessary follow-up actions.
 "@
 
 Send-Email -sendGridApiKey $sendGridApiKey `
-    -senderEmailAddress $sendGridSenderEmailAddress `
-    -recipientEmailAddresses $sendGridRecipientEmailAddresses `
+    -senderEmailAddress $SendGridSenderEmailAddress `
+    -recipientEmailAddresses $SendGridRecipientEmailAddresses `
     -subject $emailSubject `
     -content $emailContent `
     -attachments $attachments
 
 # Iterate over the report and send FIRST notification to user and manager
 foreach ($user in $notification) {
-    if (-not $testing) {
+    if (-not $Testing) {
         # Validate that user has an email address
         if (-not $user.Email) {
             Write-Warning "User $($user.DisplayName) has no email address. Skipping notification."
@@ -873,11 +875,11 @@ foreach ($user in $notification) {
         $userEmailContent = @"
 Dear $($user.DisplayName),
 
-We have noticed that your user account has been inactive for $userWarningThreshold days. According to our account security policy, inactive accounts are disabled after $inactivityTime days of inactivity.
+We have noticed that your user account has been inactive for $UserWarningThreshold days. According to our account security policy, inactive accounts are disabled after $InactivityTime days of inactivity.
 
 YOUR ACCOUNT STATUS:
 - Current Status: Enabled (but inactive)
-- Last Activity: More than $userWarningThreshold days ago
+- Last Activity: More than $UserWarningThreshold days ago
 - Days Until Disabling: $daysRemaining
 
 ACTION REQUIRED:
@@ -889,9 +891,9 @@ HOW TO RE-ACTIVATE:
 3. Complete any multi-factor authentication prompts
 
 NOTIFICATION SCHEDULE:
-- This is the FIRST notification (at $userWarningThreshold days of inactivity)
-- You will receive a second reminder in approximately $([math]::Round($midPointThreshold - $userWarningThreshold)) days
-- Your account will be disabled after $inactivityTime days of total inactivity
+- This is the FIRST notification (at $UserWarningThreshold days of inactivity)
+- You will receive a second reminder in approximately $([math]::Round($midPointThreshold - $UserWarningThreshold)) days
+- Your account will be disabled after $InactivityTime days of total inactivity
 
 MANAGER NOTIFICATION:
 Your manager ($($user.Manager)) has also been notified of this status.
@@ -904,7 +906,7 @@ Please note: This is an automated notification. Do not reply to this email.
 "@
         
         Send-Email -sendGridApiKey $sendGridApiKey `
-            -senderEmailAddress $sendGridSenderEmailAddress `
+            -senderEmailAddress $SendGridSenderEmailAddress `
             -recipientEmailAddresses $userRecipients `
             -subject $userEmailSubject `
             -content $userEmailContent
@@ -918,10 +920,10 @@ Please note: This is an automated notification. Do not reply to this email.
 
 # Iterate over the mid-point report and send SECOND notification to manager only
 foreach ($user in $midPointNotification) {
-    if (-not $testing) {
+    if (-not $Testing) {
         # Only notify if we have a manager email
         if ($user.ManagerEmail) {
-            $daysUntilDisable = $inactivityTime - $midPointThreshold
+            $daysUntilDisable = $InactivityTime - $midPointThreshold
             
             $managerEmailSubject = "Reminder: $($user.DisplayName)'s Account Will Be Disabled in $daysUntilDisable Days (Second Notice)"
             $managerEmailContent = @"
@@ -937,7 +939,7 @@ ACCOUNT STATUS UPDATE:
 - Last Activity: $($user.LastActivityDate)
 
 PREVIOUS NOTIFICATION:
-A first warning was sent to the user and yourself approximately $([math]::Round($midPointThreshold - $userWarningThreshold)) days ago when the account reached $userWarningThreshold days of inactivity.
+A first warning was sent to the user and yourself approximately $([math]::Round($midPointThreshold - $UserWarningThreshold)) days ago when the account reached $UserWarningThreshold days of inactivity.
 
 ACTION REQUIRED:
 If this user still needs access to their account:
@@ -950,7 +952,7 @@ If the user no longer needs this account:
 - You will receive a final confirmation notification when the account is disabled
 
 NEXT STEPS:
-- Account will be disabled after $inactivityTime days of total inactivity
+- Account will be disabled after $InactivityTime days of total inactivity
 - You will receive a third notification when/if the account is disabled
 
 NEED HELP?
