@@ -607,8 +607,8 @@ Foreach ($user in $allUsers) {
                     ManagerEmail             = if ($manager.Mail) { $manager.Mail } else { "" }
                     Licenses                 = if ($licenses -and $licenses -ne "Error retrieving licenses") { [string]$licenses } else { "None" }
                     Company                  = if ($user.CompanyName) { $user.CompanyName } else { "N/A" }
-                    CreatedDateTime          = if ($accountCreationDate) { $accountCreationDate.ToString("yyyy-MM-dd") } else { "N/A" }
-                    LastActivityDate         = if ($maxDate) { $maxDate.ToString("yyyy-MM-dd") } else { "Never" }
+                    CreatedDateTime          = if ($accountCreationDate -as [DateTime]) { ($accountCreationDate -as [DateTime]).ToString("yyyy-MM-dd") } else { "N/A" }
+                    LastActivityDate         = if ($maxDate -as [DateTime]) { ($maxDate -as [DateTime]).ToString("yyyy-MM-dd") } else { "Never" }
                 }
                 Write-Debug "Adding user to disabling list $($user.DisplayName)"
                 # Add current user info to report
