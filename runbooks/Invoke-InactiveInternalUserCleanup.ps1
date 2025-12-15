@@ -215,13 +215,28 @@ function Disable-OnPremADUser {
         [string]$onPremisesSamAccountName
     )
     try {
+        $user = $null
+        
         # Try to find user by onPremisesSamAccountName first (more reliable), fallback to UPN
         if ($onPremisesSamAccountName) {
-            $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { SamAccountName -eq $onPremisesSamAccountName } -Properties Description -ErrorAction Stop
+            try {
+                $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { SamAccountName -eq $onPremisesSamAccountName } -Properties Description -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-Debug "Could not find user by SamAccountName: $onPremisesSamAccountName"
+            }
         }
-        else {
-            $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { UserPrincipalName -eq $userPrincipalName } -Properties Description -ErrorAction Stop
+        
+        # If not found by SamAccountName, try by UserPrincipalName
+        if (-not $user) {
+            try {
+                $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { UserPrincipalName -eq $userPrincipalName } -Properties Description -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-Debug "Could not find user by UserPrincipalName: $userPrincipalName"
+            }
         }
+        
         if ($user) {
             # Disable the account
             Disable-ADAccount -Server $domainController -Credential $adCredentials -Identity $user -ErrorAction Stop
