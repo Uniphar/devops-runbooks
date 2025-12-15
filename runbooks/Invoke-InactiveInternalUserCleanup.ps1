@@ -211,10 +211,17 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
 # Function to disable user in on-premises AD
 function Disable-OnPremADUser {
     param (
-        [string]$userPrincipalName
+        [string]$userPrincipalName,
+        [string]$onPremisesSamAccountName
     )
     try {
-        $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { UserPrincipalName -eq $userPrincipalName } -Properties Description -ErrorAction Stop
+        # Try to find user by onPremisesSamAccountName first (more reliable), fallback to UPN
+        if ($onPremisesSamAccountName) {
+            $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { SamAccountName -eq $onPremisesSamAccountName } -Properties Description -ErrorAction Stop
+        }
+        else {
+            $user = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { UserPrincipalName -eq $userPrincipalName } -Properties Description -ErrorAction Stop
+        }
         if ($user) {
             # Disable the account
             Disable-ADAccount -Server $domainController -Credential $adCredentials -Identity $user -ErrorAction Stop
@@ -476,7 +483,7 @@ if ($exclusion.Count -gt 0) {
 
 # Gather all users in tenant (only users with employeeID defined)
 Write-Output "Retrieving all users from Microsoft Graph (Beta)..."
-$allUsers = Get-MgBetaUser -Property SignInActivity,EmployeeId,AccountEnabled,UserType,DisplayName,UserPrincipalName,Mail,CompanyName,CreatedDateTime,Id -All | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" -and $_.EmployeeId }
+$allUsers = Get-MgBetaUser -Property SignInActivity,EmployeeId,AccountEnabled,UserType,DisplayName,UserPrincipalName,Mail,CompanyName,CreatedDateTime,Id,OnPremisesSamAccountName -All | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" -and $_.EmployeeId }
 Write-Output "Retrieved $($allUsers.Count) users from Microsoft Graph"
 
 # Prepare on-prem Active Directory activity lists for two cutoff dates:
@@ -587,15 +594,16 @@ Foreach ($user in $allUsers) {
     
                 # Create informational object to add to report
                 $obj1 = [pscustomobject][ordered]@{
-                    DisplayName       = $user.DisplayName
-                    UserPrincipalName = $user.UserPrincipalName
-                    Email             = $user.Mail
-                    Manager           = $manager.DisplayName
-                    ManagerEmail      = $manager.Mail
-                    Licenses          = $licenses
-                    Company           = $user.CompanyName
-                    CreatedDateTime   = $accountCreationDate
-                    LastActivityDate  = $maxDate
+                    DisplayName              = $user.DisplayName
+                    UserPrincipalName        = $user.UserPrincipalName
+                    OnPremisesSamAccountName = if ($user.OnPremisesSamAccountName) { $user.OnPremisesSamAccountName } else { "N/A" }
+                    Email                    = if ($user.Mail) { $user.Mail } else { $user.UserPrincipalName }
+                    Manager                  = if ($manager.DisplayName) { $manager.DisplayName } else { "None" }
+                    ManagerEmail             = if ($manager.Mail) { $manager.Mail } else { "" }
+                    Licenses                 = if ($licenses -and $licenses -ne "Error retrieving licenses") { [string]$licenses } else { "None" }
+                    Company                  = if ($user.CompanyName) { $user.CompanyName } else { "N/A" }
+                    CreatedDateTime          = if ($accountCreationDate) { $accountCreationDate.ToString("yyyy-MM-dd") } else { "N/A" }
+                    LastActivityDate         = if ($maxDate) { $maxDate.ToString("yyyy-MM-dd") } else { "Never" }
                 }
                 Write-Debug "Adding user to disabling list $($user.DisplayName)"
                 # Add current user info to report
@@ -638,15 +646,16 @@ Foreach ($user in $allUsers) {
     
                 # Create informational object to add to report
                 $obj2 = [pscustomobject][ordered]@{
-                    DisplayName       = $user.DisplayName
-                    UserPrincipalName = $user.UserPrincipalName
-                    Email             = $user.Mail
-                    Manager           = $manager.DisplayName
-                    ManagerEmail      = $manager.Mail
-                    Licenses          = $licenses
-                    Company           = $user.CompanyName
-                    CreatedDateTime   = $accountCreationDate
-                    LastActivityDate  = $maxDate
+                    DisplayName              = $user.DisplayName
+                    UserPrincipalName        = $user.UserPrincipalName
+                    OnPremisesSamAccountName = if ($user.OnPremisesSamAccountName) { $user.OnPremisesSamAccountName } else { "N/A" }
+                    Email                    = if ($user.Mail) { $user.Mail } else { $user.UserPrincipalName }
+                    Manager                  = if ($manager.DisplayName) { $manager.DisplayName } else { "None" }
+                    ManagerEmail             = if ($manager.Mail) { $manager.Mail } else { "" }
+                    Licenses                 = if ($licenses -and $licenses -ne "Error retrieving licenses") { [string]$licenses } else { "None" }
+                    Company                  = if ($user.CompanyName) { $user.CompanyName } else { "N/A" }
+                    CreatedDateTime          = if ($accountCreationDate) { $accountCreationDate.ToString("yyyy-MM-dd") } else { "N/A" }
+                    LastActivityDate         = if ($maxDate) { $maxDate.ToString("yyyy-MM-dd") } else { "Never" }
                 }
                 Write-Debug "Adding user to notification list (first warning) $($user.DisplayName)"
                 # Add current user info to report
@@ -687,15 +696,16 @@ Foreach ($user in $allUsers) {
     
                 # Create informational object to add to report
                 $obj3 = [pscustomobject][ordered]@{
-                    DisplayName       = $user.DisplayName
-                    UserPrincipalName = $user.UserPrincipalName
-                    Email             = $user.Mail
-                    Manager           = $manager.DisplayName
-                    ManagerEmail      = $manager.Mail
-                    Licenses          = $licenses
-                    Company           = $user.CompanyName
-                    CreatedDateTime   = $accountCreationDate
-                    LastActivityDate  = $maxDate
+                    DisplayName              = $user.DisplayName
+                    UserPrincipalName        = $user.UserPrincipalName
+                    OnPremisesSamAccountName = if ($user.OnPremisesSamAccountName) { $user.OnPremisesSamAccountName } else { "N/A" }
+                    Email                    = if ($user.Mail) { $user.Mail } else { $user.UserPrincipalName }
+                    Manager                  = if ($manager.DisplayName) { $manager.DisplayName } else { "None" }
+                    ManagerEmail             = if ($manager.Mail) { $manager.Mail } else { "" }
+                    Licenses                 = if ($licenses -and $licenses -ne "Error retrieving licenses") { [string]$licenses } else { "None" }
+                    Company                  = if ($user.CompanyName) { $user.CompanyName } else { "N/A" }
+                    CreatedDateTime          = if ($accountCreationDate) { $accountCreationDate.ToString("yyyy-MM-dd") } else { "N/A" }
+                    LastActivityDate         = if ($maxDate) { $maxDate.ToString("yyyy-MM-dd") } else { "Never" }
                 }
                 Write-Debug "Adding user to mid-point notification list (second warning) $($user.DisplayName)"
                 # Add current user info to report
@@ -716,7 +726,8 @@ $disableReport = @()
 # Iterate over the report and disable users
 foreach ($user in $report) {
     if (-not $Testing) {
-        $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName
+        $onPremSam = if ($user.OnPremisesSamAccountName -and $user.OnPremisesSamAccountName -ne "N/A") { $user.OnPremisesSamAccountName } else { $null }
+        $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName -onPremisesSamAccountName $onPremSam
         $azureResult = Disable-MgUser -userId $user.UserPrincipalName
     }
     else {
@@ -726,9 +737,11 @@ foreach ($user in $report) {
 
     # Add result to report
     $disableReport += [PSCustomObject]@{
-        UserPrincipalName = $user.UserPrincipalName
-        OnPremResult      = $onPremResult
-        AzureResult       = $azureResult
+        DisplayName              = $user.DisplayName
+        UserPrincipalName        = $user.UserPrincipalName
+        OnPremisesSamAccountName = if ($user.OnPremisesSamAccountName) { $user.OnPremisesSamAccountName } else { "N/A" }
+        OnPremResult             = $onPremResult
+        AzureResult              = $azureResult
     }
 }
 
