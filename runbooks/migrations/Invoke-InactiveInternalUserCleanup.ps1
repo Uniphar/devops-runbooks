@@ -97,8 +97,7 @@ try {
     Import-Module Microsoft.Graph.Groups -ErrorAction Stop
     
     Write-Output "All required modules imported successfully"
-}
-catch {
+} catch {
     Write-Error "Failed to import required modules: $_"
     throw
 }
@@ -112,23 +111,19 @@ Write-Output "Successfully connected to Microsoft Graph using managed identity"
 # Normalize administrative recipient input so Azure Automation single-value bindings do not break array expectations.
 if ($null -eq $SendGridRecipientEmailAddresses) {
     $SendGridRecipientEmailAddresses = @()
-}
-elseif ($SendGridRecipientEmailAddresses -is [System.Collections.IEnumerable] -and $SendGridRecipientEmailAddresses -isnot [string]) {
+} elseif ($SendGridRecipientEmailAddresses -is [System.Collections.IEnumerable] -and $SendGridRecipientEmailAddresses -isnot [string]) {
     $SendGridRecipientEmailAddresses = @($SendGridRecipientEmailAddresses | ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } | Where-Object { $_ })
-}
-else {
+} else {
     $rawRecipients = $SendGridRecipientEmailAddresses.ToString().Trim()
 
     if ($rawRecipients.StartsWith('[') -and $rawRecipients.EndsWith(']')) {
         try {
             $parsedRecipients = $rawRecipients | ConvertFrom-Json -ErrorAction Stop
             $SendGridRecipientEmailAddresses = @($parsedRecipients | ForEach-Object { if ($_ -ne $null) { $_.ToString().Trim() } } | Where-Object { $_ })
-        }
-        catch {
+        } catch {
             $SendGridRecipientEmailAddresses = @($rawRecipients -split "[,;`r`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         }
-    }
-    else {
+    } else {
         $SendGridRecipientEmailAddresses = @($rawRecipients -split "[,;`r`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     }
 }
@@ -139,8 +134,7 @@ $SendGridRecipientEmailAddresses = [string[]]$SendGridRecipientEmailAddresses
 # the `-SendGridApiKeyKvName` parameter. The script will error and return if it's not provided.
 if ($SendGridApiKeyKvName) {
     $vaultName = $SendGridApiKeyKvName
-}
-else {
+} else {
     Write-Error "Parameter -SendGridApiKeyKvName is required so the runbook can retrieve secrets from Key Vault."
     return
 }
@@ -152,17 +146,14 @@ if ($SendGridApiKeyKvSecretName) {
         $sendGridSecret = Get-AzKeyVaultSecret -VaultName $vaultName -Name $SendGridApiKeyKvSecretName -ErrorAction Stop
         if ($sendGridSecret.SecretValueText) {
             $sendGridApiKey = $sendGridSecret.SecretValueText
-        }
-        else {
+        } else {
             $sendGridApiKey = [Net.NetworkCredential]::new('', $sendGridSecret.SecretValue).Password
         }
-    }
-    catch {
+    } catch {
         Write-Error "Failed to retrieve SendGrid API key '$SendGridApiKeyKvSecretName' from Key Vault '$vaultName'. $_"
         return
     }
-}
-elseif (-not $Testing) {
+} elseif (-not $Testing) {
     Write-Error 'When -Testing is set to $false you must supply -SendGridApiKeyKvSecretName so the script can send email notifications.'
     return
 }
@@ -199,15 +190,6 @@ $reportDir = $env:TEMP
 # Hardcoded SendGrid API endpoint
 $sendGridApiEndpoint = 'https://api.sendgrid.com/v3/mail/send'
 
-# Guard: ensure runbook is running under Windows PowerShell (5.1) when using RSAT/AD cmdlets
-# If the Automation runbook is configured to use PowerShell 7 (Core) but the Hybrid Worker
-# does not have the pwsh executable, Azure will fail to start the job with an unclear error.
-if ($PSVersionTable.PSEdition -eq 'Core') {
-    Write-Error "This runbook requires Windows PowerShell (Desktop/5.1) because it uses the ActiveDirectory RSAT module."
-    Write-Error "Options: (a) Change the runbook runtime to 'Windows PowerShell (5.1)' in the Automation runbook settings, or (b) install PowerShell 7 (pwsh) on the Hybrid Worker and ensure it's in PATH."
-    return
-}
-
 # Function to disable user in on-premises AD
 function Disable-OnPremADUser {
     param (
@@ -235,11 +217,9 @@ function Disable-OnPremADUser {
             $currentDescription = $user.Description
             if (-not $currentDescription) {
                 $newDescription = "INACTIVE-USER-DISABLED"
-            }
-            elseif (-not $currentDescription.StartsWith("INACTIVE-USER-DISABLED")) {
+            } elseif (-not $currentDescription.StartsWith("INACTIVE-USER-DISABLED")) {
                 $newDescription = "INACTIVE-USER-DISABLED $currentDescription"
-            }
-            else {
+            } else {
                 $newDescription = $currentDescription # Already marked
             }
             
@@ -247,13 +227,11 @@ function Disable-OnPremADUser {
             
             Write-Output "Disabled on-prem AD account for user: $userPrincipalName (Description updated)"
             return "Success"
-        }
-        else {
+        } else {
             Write-Warning "User not found in on-prem AD: $userPrincipalName"
             return "User not found"
         }
-    }
-    catch {
+    } catch {
         $errorMsg = $_.Exception.Message
         Write-Error "Failed to disable on-prem AD account for user '$userPrincipalName': $errorMsg"
         return "Error: $errorMsg"
@@ -269,8 +247,7 @@ function Disable-MgUser {
         Update-MgUser -UserId $userId -AccountEnabled:$false
         Write-Debug "Disabled Azure AD account for user: $userId"
         return "Success"
-    }
-    catch {
+    } catch {
         $errorMsg = $_.Exception.Message
         Write-Error "Failed to disable Azure AD account for user '$userId': $errorMsg"
         return "Error: $errorMsg"
@@ -312,11 +289,9 @@ function Get-GroupMembers {
 
                 if ($member.AdditionalProperties -and $member.AdditionalProperties.ContainsKey('userPrincipalName')) {
                     $userPrincipalName = $member.AdditionalProperties['userPrincipalName']
-                }
-                elseif ($member.PSObject.Properties['UserPrincipalName']) {
+                } elseif ($member.PSObject.Properties['UserPrincipalName']) {
                     $userPrincipalName = $member.UserPrincipalName
-                }
-                else {
+                } else {
                     # Fall back to an explicit lookup if the lightweight member payload lacks UPN
                     $user = Get-MgUser -UserId $member.Id -ErrorAction SilentlyContinue
                     if ($user) {
@@ -327,12 +302,10 @@ function Get-GroupMembers {
                 if ($userPrincipalName) {
                     [void]$exclusion.Value.Add($userPrincipalName)
                     # Remove individual user output - will be shown in summary
-                }
-                else {
+                } else {
                     Write-Warning "Could not resolve user principal name for member '$($member.Id)'; skipping."
                 }
-            }
-            elseif ($memberType -eq "#microsoft.graph.group") {
+            } elseif ($memberType -eq "#microsoft.graph.group") {
                 # Get the nested group and recursively process its members
                 $nestedGroup = Get-MgGroup -GroupId $member.Id -ErrorAction SilentlyContinue
                 if ($nestedGroup) {
@@ -341,8 +314,7 @@ function Get-GroupMembers {
                 }
             }
         }
-    }
-    catch {
+    } catch {
         Write-Error "Failed to retrieve group members for group '$groupId': $_"
         Write-Error "Error details: $($_.Exception.Message)"
         if ($_.Exception.InnerException) {
@@ -417,8 +389,7 @@ An optional array of attachment objects. Each object must include:
         try {
             Add-Content -Path $logFile -Value $logContent -ErrorAction Stop
             Write-Output "Email logged to: $logFile"
-        }
-        catch {
+        } catch {
             Write-Warning "Could not write to log file '$logFile'. Error: $_"
         }
     }
@@ -446,8 +417,7 @@ An optional array of attachment objects. Each object must include:
                     disposition = "attachment"
                 }
             }
-        }
-        else {
+        } else {
             @()
         }
 
@@ -462,8 +432,7 @@ An optional array of attachment objects. Each object must include:
         $bodyJson = $body | ConvertTo-Json -Depth 4
         Invoke-RestMethod -Uri $sendGridApiEndpoint -Method Post -Headers $headers -Body $bodyJson -ErrorAction Stop
         Write-Output "Email sent successfully to: $($recipientEmailAddresses -join ', ')"
-    }
-    catch {
+    } catch {
         Write-Error "Failed to send email via SendGrid: $_"
     }
 }
@@ -480,15 +449,14 @@ if ($exclusion.Count -gt 0) {
     $preview = $exclusion[0..($previewCount - 1)] -join ', '
     if ($exclusion.Count -le 10) {
         Write-Output "Exclusion list (all $($exclusion.Count) users): $preview"
-    }
-    else {
+    } else {
         Write-Output "Exclusion list (showing first 10 of $($exclusion.Count) users): $preview"
     }
 }
 
 # Gather all users in tenant (only users with employeeID defined)
 Write-Output "Retrieving all users from Microsoft Graph (Beta)..."
-$allUsers = Get-MgBetaUser -Property SignInActivity,EmployeeId,AccountEnabled,UserType,DisplayName,UserPrincipalName,Mail,CompanyName,CreatedDateTime,Id,OnPremisesSamAccountName -All | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" -and $_.EmployeeId }
+$allUsers = Get-MgBetaUser -Property SignInActivity, EmployeeId, AccountEnabled, UserType, DisplayName, UserPrincipalName, Mail, CompanyName, CreatedDateTime, Id, OnPremisesSamAccountName -All | Where-Object { $_.AccountEnabled -and $_.UserType -eq "Member" -and $_.EmployeeId }
 Write-Output "Retrieved $($allUsers.Count) users from Microsoft Graph"
 
 # Prepare on-prem Active Directory activity lists for two cutoff dates:
@@ -505,8 +473,7 @@ try {
     $activeUsers = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { LastLogonDate -ge $cutoffDate } -Properties UserPrincipalName, LastLogonDate -ErrorAction Stop
     $activeUsers2 = Get-ADUser -Server $domainController -Credential $adCredentials -Filter { LastLogonDate -ge $cutoffDate2 } -Properties UserPrincipalName, LastLogonDate -ErrorAction Stop
     Write-Output "Successfully retrieved on-prem AD user data. Active users (cutoff $cutoffDate): $($activeUsers.Count), Active users (cutoff $cutoffDate2): $($activeUsers2.Count)"
-}
-catch {
+} catch {
     Write-Error "Failed to contact on-premises AD domain controller '$domainController'. Error: $_"
     Write-Error "Verify: (1) Domain controller name is correct, (2) Hybrid Worker can reach the DC, (3) Credentials are valid, (4) Network/firewall allows LDAP traffic."
     throw
@@ -557,8 +524,7 @@ Foreach ($user in $allUsers) {
     if ($maxDate) {
         $daysInactive = [math]::Round(((Get-Date) - $maxDate).TotalDays)
         Write-Debug "Last sign in date is $($maxDate), Days of inactivity: $daysInactive"
-    }
-    else {
+    } else {
         Write-Debug "Last sign in date is not available"
     }
     # Retrieve account creation date
@@ -573,8 +539,7 @@ Foreach ($user in $allUsers) {
         # Get current user license information
         try {
             $licenses = (Get-MgBetaUserLicenseDetail -UserId $user.id -ErrorAction SilentlyContinue).SkuPartNumber -join ", "
-        }
-        catch {
+        } catch {
             $licenses = "Error retrieving licenses"
         }
     
@@ -585,8 +550,7 @@ Foreach ($user in $allUsers) {
             if ($managerid) {
                 $manager = get-mguser -UserId $managerid.Id -ErrorAction SilentlyContinue
             }
-        }
-        catch {
+        } catch {
             $manager = $null
         }
     
@@ -626,8 +590,7 @@ Foreach ($user in $allUsers) {
         # Get current user license information
         try {
             $licenses = (Get-MgBetaUserLicenseDetail -UserId $user.id -ErrorAction SilentlyContinue).SkuPartNumber -join ", "
-        }
-        catch {
+        } catch {
             $licenses = "Error retrieving licenses"
         }
             
@@ -638,8 +601,7 @@ Foreach ($user in $allUsers) {
             if ($managerid) {
                 $manager = get-mguser -UserId $managerid.Id -ErrorAction SilentlyContinue
             }
-        }
-        catch {
+        } catch {
             $manager = $null
         }
     
@@ -676,8 +638,7 @@ Foreach ($user in $allUsers) {
         # Get current user license information
         try {
             $licenses = (Get-MgBetaUserLicenseDetail -UserId $user.id -ErrorAction SilentlyContinue).SkuPartNumber -join ", "
-        }
-        catch {
+        } catch {
             $licenses = "Error retrieving licenses"
         }
             
@@ -688,8 +649,7 @@ Foreach ($user in $allUsers) {
             if ($managerid) {
                 $manager = get-mguser -UserId $managerid.Id -ErrorAction SilentlyContinue
             }
-        }
-        catch {
+        } catch {
             $manager = $null
         }
     
@@ -734,8 +694,7 @@ foreach ($user in $report) {
         $onPremSam = if ($user.OnPremisesSamAccountName -and $user.OnPremisesSamAccountName -ne "N/A") { $user.OnPremisesSamAccountName } else { $null }
         $onPremResult = Disable-OnPremADUser -userPrincipalName $user.UserPrincipalName -onPremisesSamAccountName $onPremSam
         $azureResult = Disable-MgUser -userId $user.UserPrincipalName
-    }
-    else {
+    } else {
         $onPremResult = "Testing mode - no action taken"
         $azureResult = "Testing mode - no action taken"
     }
@@ -800,12 +759,10 @@ This is an automated notification. Do not reply to this email.
                 -content $managerEmailContent
             
             Write-Output "Sent disable notification (3rd) to manager: $($user.ManagerEmail) for user: $($user.DisplayName)"
-        }
-        else {
+        } else {
             Write-Warning "No manager email for disabled user: $($user.DisplayName). Skipping manager notification."
         }
-    }
-    else {
+    } else {
         Write-Output "Testing mode: Would send disable notification (3rd) to manager for user $($user.DisplayName)"
     }
 }
@@ -884,8 +841,7 @@ foreach ($user in $notification) {
         $userRecipients = @($user.Email)
         if ($user.ManagerEmail) {
             $userRecipients += $user.ManagerEmail
-        }
-        else {
+        } else {
             Write-Warning "User $($user.DisplayName) has no manager email. Notification will only be sent to user."
         }
         
@@ -930,8 +886,7 @@ Please note: This is an automated notification. Do not reply to this email.
             -content $userEmailContent
         
         Write-Output "Sent first warning to user and manager: $($user.DisplayName)"
-    }
-    else {
+    } else {
         Write-Output "Testing mode: Skipping first notification email to user $($user.DisplayName) and manager"
     }
 }
@@ -987,12 +942,10 @@ This is an automated notification. Do not reply to this email.
                 -content $managerEmailContent
             
             Write-Output "Sent second warning (mid-point) to manager: $($user.ManagerEmail) for user: $($user.DisplayName)"
-        }
-        else {
+        } else {
             Write-Warning "No manager email for user: $($user.DisplayName). Skipping mid-point notification."
         }
-    }
-    else {
+    } else {
         Write-Output "Testing mode: Would send second notification (mid-point) to manager for user $($user.DisplayName)"
     }
 }
