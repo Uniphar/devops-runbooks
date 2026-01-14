@@ -33,7 +33,7 @@ The action to perform on the devices. Options are "ReportOnly", "DisableAndDelet
 [CmdletBinding()]
 
 param (
-     [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true)]
     [string] $SendGridApiKeyKvName,
     [Parameter(Mandatory = $true)]
     [string] $SendGridApiKeyKvSecretName,
@@ -50,15 +50,11 @@ param (
 
 Connect-MgGraph -Identity -NoWelcome
 
-Disable-AzContextAutosave -Scope Process
-$context = (Connect-AzAccount -Identity).context
-Set-AzContext -SubscriptionName $context.Subscription -DefaultProfile $context
-
 $ErrorActionPreference = "Stop"
 $reportDir = $env:TEMP
 
 function Send-EmailReport {
-<#
+    <#
 .SYNOPSIS
 Sends an email report using SendGrid.
 
@@ -171,12 +167,12 @@ try {
     $recipientArray = $SendGridRecipientEmailAddresses -split '\s*,\s*'
 
     Send-EmailReport -SendGridApiKey $sendGridApiKey `
-                     -SendGridApiEndpoint $SendGridApiEndpoint `
-                     -SenderEmailAddress $SendGridSenderEmailAddress `
-                     -RecipientEmailAddresses $recipientArray `
-                     -Subject "Device Cleanup Report" `
-                     -Content "This is a report from MS Entra device cleanup. Pending Devices to Disable: $($pendingDevices.count), Stale Devices to Delete: $($staleDevices.count). $actionDescription" `
-                     -Attachments $attachments
+        -SendGridApiEndpoint $SendGridApiEndpoint `
+        -SenderEmailAddress $SendGridSenderEmailAddress `
+        -RecipientEmailAddresses $recipientArray `
+        -Subject "Device Cleanup Report" `
+        -Content "This is a report from MS Entra device cleanup. Pending Devices to Disable: $($pendingDevices.count), Stale Devices to Delete: $($staleDevices.count). $actionDescription" `
+        -Attachments $attachments
 
     # Clean Up Devices
     if ("DisableAndDelete" -eq $ScriptAction) {
@@ -190,7 +186,6 @@ try {
             Remove-MgDevice -DeviceId $_.Id
         }
     }
-}
-catch {
+} catch {
     Write-Error $_.Exception.Message
 }
